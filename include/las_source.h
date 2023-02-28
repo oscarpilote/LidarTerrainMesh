@@ -22,8 +22,8 @@ int las_get_sources(TArray<struct LasPoint> &points);
 void las_stat_sources(const TArray<struct LasPoint> &points,
 		      TArray<struct SourceStat> &stats);
 
-void las_approx_flight_lines(const TArray<struct LasPoint> &points,
-			     double *scale,
-			     const TArray<struct SourceStat> &stats,
-			     TArray<struct SourceFlightLine> &fls);
+int las_approx_flight_lines(const TArray<struct LasPoint> &points,
+			    const double *scale,
+			    const TArray<struct SourceStat> &stats,
+			    TArray<struct SourceFlightLine> &fls);
 

@@ -135,10 +135,10 @@ static inline void update_across(const struct LasPoint &pt,
 	}
 }
 
-void las_approx_flight_lines(const TArray<struct LasPoint> &points,
-			     double *scale,
-			     const TArray<struct SourceStat> &stats,
-			     TArray<struct SourceFlightLine> &fls)
+int las_approx_flight_lines(const TArray<struct LasPoint> &points,
+			    const double *scale,
+			    const TArray<struct SourceStat> &stats,
+			    TArray<struct SourceFlightLine> &fls)
 {
 	int source_num = stats.size;
 	int point_num = points.size;
@@ -158,6 +158,7 @@ void las_approx_flight_lines(const TArray<struct LasPoint> &points,
 		update_across(pt, ac, i);
 	}
 
+	int ret = 0;
 	/* Set azimuth for sources */
 	for (int i = 0; i < source_num; ++i) {
 		const struct AlongFLSearch &al = along[i];
@@ -165,14 +166,10 @@ void las_approx_flight_lines(const TArray<struct LasPoint> &points,
 		struct SourceFlightLine &fl = fls[i];
 
 		if (al.idx_of_min == -1 || al.idx_of_max == -1) {
-			printf("missing along for %d\n", i);
-			printf("%d %d\n", al.idx_of_min, al.idx_of_max);
 			fl.is_valid = false;
 			continue;
 		}
 		if (ac.idx_of_min == -1 || ac.idx_of_max == -1) {
-			printf("missing across for %d\n", i);
-			printf("%d %d\n", ac.idx_of_min, ac.idx_of_max);
 			fl.is_valid = false;
 			continue;
 		}
@@ -184,7 +181,6 @@ void las_approx_flight_lines(const TArray<struct LasPoint> &points,
 		if ((p0.x == p1.x && p0.y == p1.y) ||
 		    (p2.x == p3.x && p2.y == p3.y)) {
 			fl.is_valid = false;
-			printf("same points for %d\n", i);
 			continue;
 		}
 
@@ -200,11 +196,14 @@ void las_approx_flight_lines(const TArray<struct LasPoint> &points,
 			       cos(theta_ac) * sin(theta_al);
 		if (fabs(check) < 0.5) {
 			fl.is_valid = false;
-			printf("not ortho for %d : %lf\n", i, check);
 		} else {
 			fl.is_valid = true;
 			fl.theta_along = theta_al;
 			fl.theta_across = theta_ac;
 		}
+		if (fl.is_valid) {
+			ret++;
+		}
 	}
+	return (ret);
 }

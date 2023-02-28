@@ -1,48 +1,62 @@
-#include <assert.h>
+#include "plane_fitting.h"
+#include "vec3.h"
 
 #include "las_point_cloud.h"
 #include "las_source.h"
 #include "las_tree.h"
-#include "plane_fitting.h"
-#include "vec3.h"
 
 #include "las_normal.h"
 
-void estimate_unoriented_normals(const struct LasCoords &coords,
-				 const LasTree &tree, TArray<Vec3> &nml,
-				 TArray<float> &qual, int probes)
+void estim_unoriented_nml(const Vec3 *pos, size_t point_num, Vec3 *nml,
+			  float *qual, const LasTree &tree,
+			  void (*cb)(float progress), int probes)
 {
 	TArray<unsigned> knn_idx(probes);
 	TArray<Vec3> neigh(probes);
 	TArray<float> sqr_dist(probes);
-	printf(" [");
-	fflush(stdout);
-	size_t step = coords.size / 20;
-	size_t done = 0;
-	for (size_t i = 0; i < coords.size; ++i) {
-		const float *query = &coords[i].x;
+	size_t tick = point_num / 100;
+	size_t step = 0;
+	for (size_t i = 0; i < point_num; ++i) {
+		const float *query = &pos[i].x;
 		tree.knnSearch(query, probes, &knn_idx[0], &sqr_dist[0]);
 		for (int j = 0; j < probes; ++j) {
-			neigh[j] = coords[knn_idx[j]];
+			neigh[j] = pos[knn_idx[j]];
 		}
 		qual[i] = fit_plane_vcg<float>(&neigh[0], probes, nml[i]);
-		done += 1;
-		if (done == step) {
-			printf("-");
-			fflush(stdout);
-			done = 0;
+		if (cb) {
+			step += 1;
+			if (step == tick) {
+				cb((float)i * 100 / point_num);
+				step = 0;
+			}
 		}
 	}
-	printf("]\n");
 }
 
-size_t orient_normals_with_scanlines(const TArray<struct LasPoint> &points,
-				     const TArray<struct SourceFlightLine> &fls,
-				     TArray<float> &qual, TArray<Vec3> &nml,
-				     TArray<EOrient> &oriented, float tol)
+size_t orient_nml_with_z(Vec3 *nml, EOrient *oriented, size_t point_num)
 {
 	size_t unsettled = 0;
-	for (size_t i = 0; i < points.size; ++i) {
+	for (size_t i = 0; i < point_num; ++i) {
+		if (fabs(nml[i].z) > NML_Z_THRESH) {
+			oriented[i] = EPositiveZ;
+			if (nml[i].z < 0)
+				nml[i] *= -1;
+		} else {
+			unsettled++;
+		}
+	}
+	return (unsettled);
+}
+
+size_t orient_nml_with_scan(const LasPoint *points, size_t point_num,
+			    const SourceFlightLine *fls, size_t source_num,
+			    const float *qual, Vec3 *nml, EOrient *oriented,
+			    float tol)
+{
+	size_t unsettled = 0;
+	for (size_t i = 0; i < point_num; ++i) {
+		if (oriented[i] >= EScanline)
+			continue;
 		const SourceFlightLine &fl = fls[points[i].source_idx];
 		if (!fl.is_valid) {
 			unsettled++;
@@ -66,15 +80,14 @@ size_t orient_normals_with_scanlines(const TArray<struct LasPoint> &points,
 	return (unsettled);
 }
 
-size_t propagate_normals_once(const struct LasCoords &pos, const LasTree &tree,
-			      TArray<float> &qual, TArray<Vec3> &nml,
-			      TArray<EOrient> &oriented, size_t probes,
-			      float tol)
+size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
+			  const LasTree &tree, const float *qual, Vec3 *nml,
+			  EOrient *oriented, size_t probes, float tol)
 {
 	size_t newly_settled = 0;
 	TArray<unsigned> knn_idx(probes);
 	TArray<float> sqr_dist(probes);
-	for (size_t i = 0; i < nml.size; ++i) {
+	for (size_t i = 0; i < point_num; ++i) {
 		if (oriented[i] >= EPlague)
 			continue;
 		const float *query = &pos[i].x;
@@ -96,7 +109,7 @@ size_t propagate_normals_once(const struct LasCoords &pos, const LasTree &tree,
 				nml[i] *= -1;
 		}
 	}
-	for (size_t i = 0; i < nml.size; ++i) {
+	for (size_t i = 0; i < point_num; ++i) {
 		if (oriented[i] == ETmpPlague)
 			oriented[i] = EPlague;
 	}

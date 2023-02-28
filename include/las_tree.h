@@ -1,17 +1,19 @@
 #pragma once
 
-#include "nanoflann.hpp"
+#include "nanoflann/nanoflann.hpp"
 
 #include "array.h"
 #include "vec3.h"
 
 /* Cfr nanoflann documentation. */
-struct LasCoords : public TArray<Vec3> {
-	LasCoords(size_t size) : TArray<Vec3>(size) {}
+struct LasCoords {
+	const Vec3 *pos;
+	size_t size;
 	inline size_t kdtree_get_point_count() const { return size; }
 	inline float kdtree_get_pt(const size_t idx, int dim) const
 	{
-		return (*this)[idx][dim];
+		assert(idx < size && dim >= 0 && dim < 3);
+		return pos[idx][dim];
 	}
 	template <class BBOX>
 	bool kdtree_get_bbox(BBOX &bb) const
