@@ -7,6 +7,14 @@ add_library(miniply
 	../extern/miniply/miniply.cpp
 	)
 
+add_library(meshoptimizer
+	../extern/meshoptimizer/src/allocator.cpp
+	../extern/meshoptimizer/src/vfetchoptimizer.cpp
+	../extern/meshoptimizer/src/vcacheoptimizer.cpp
+	../extern/meshoptimizer/src/indexcodec.cpp
+	../extern/meshoptimizer/src/vertexcodec.cpp
+	)
+
 add_executable(swiss_lidar
 	las_read.cpp
 	las_source.cpp
@@ -21,7 +29,7 @@ add_executable(swiss_lidar
 
 target_compile_features(swiss_lidar PRIVATE cxx_std_17)
 target_compile_options(swiss_lidar PRIVATE -Wall)
-target_link_libraries(swiss_lidar miniply)
+target_link_libraries(swiss_lidar miniply meshoptimizer)
 
 add_executable(compute_normals
 	las_read.cpp

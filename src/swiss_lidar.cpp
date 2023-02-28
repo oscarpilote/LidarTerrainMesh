@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "meshoptimizer/src/meshoptimizer.h"
+
 #include "array.h"
 #include "hash_table.h"
 #include "math_utils.h"
@@ -38,6 +40,8 @@ struct Cfg {
 	int y0_base;
 	bool verbose;
 	bool simplify;
+	bool optimize;
+	bool encode;
 	float hausd;
 	float hgrad;
 };
@@ -70,9 +74,11 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.x0_base = (argc >= 8) ? atoi(argv[7]) : 0;
 	cfg.y0_base = (argc >= 9) ? atoi(argv[8]) : 0;
 	cfg.verbose = (argc >= 10) ? atoi(argv[9]) : 1;
-	cfg.simplify = (argc >= 11);
-	cfg.hausd = (argc >= 11) ? atof(argv[10]) : 0.15f;
-	cfg.hgrad = (argc >= 12) ? atof(argv[11]) : 5.f;
+	cfg.simplify = (argc >= 11) ? atoi(argv[10]) : 0;
+	cfg.optimize = (argc >= 12) ? atoi(argv[11]) : 0;
+	cfg.encode = (argc >= 13) ? atoi(argv[12]) : 0;
+	cfg.hausd = (argc >= 14) ? atof(argv[13]) : 0.15f;
+	cfg.hgrad = (argc >= 15) ? atof(argv[14]) : 5.f;
 
 	return (0);
 }
@@ -420,8 +426,8 @@ static int build_oriented_point_set(Mesh &mesh, MBuf &data,
 		size_t new_num = 0;
 		for (size_t i = 0; i < point_num; ++i) {
 			if (oriented[i] != ENone) {
-				data.positions[point_num] = data.positions[i];
-				data.normals[point_num] = data.normals[i];
+				data.positions[new_num] = data.positions[i];
+				data.normals[new_num] = data.normals[i];
 				new_num++;
 			}
 		}
@@ -514,6 +520,9 @@ static int postprocess_surface_mesh(Mesh &mesh, MBuf &data,
 	       1e-6 * mesh2.index_count / 3);
 
 	/* Inverse transform points + shift relative to base */
+	/* TODO : should be eventually removed and use scene
+	 *        object placement and scaling instead
+	 */
 	Vec3 base_shift{(cfg.x0 - cfg.x0_base) * 1000.f,
 			(cfg.y0 - cfg.y0_base) * 1000.f, 0};
 	float scale = (1 / (100 * transf.scale)); /* in meters */
@@ -574,6 +583,60 @@ static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
 
 	return (ret);
 }
+
+int optimize_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
+{
+	uint32_t index_count = mesh.index_count;
+	uint32_t *indices = data.indices + mesh.index_offset;
+	uint32_t vertex_count = mesh.vertex_count;
+	float *vertices = (float *)(data.positions + mesh.vertex_offset);
+	size_t vertex_size = sizeof(Vec3);
+	meshopt_optimizeVertexCache(indices, indices, mesh.index_count, mesh.vertex_count);
+	/* TODO This only work for POS only meshes, use
+	 * meshopt_optimizeVertexFetchRemap instead
+	 * */
+	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices, vertex_count, vertex_size);
+	return (0);
+}
+
+int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg, const Transform &transf)
+{
+	uint32_t index_count = mesh.index_count;
+	uint32_t vertex_count = mesh.vertex_count;
+	Vec3 base_shift{(cfg.x0 - cfg.x0_base) * 1000.f,
+			(cfg.y0 - cfg.y0_base) * 1000.f, 0};
+	float invscale = (100 * transf.scale);
+	TArray<TVec3<uint16_t>> qpos(vertex_count);
+	for (size_t i = 0; i < vertex_count; ++i) {
+		Vec3 cubepos = data.positions[i];
+		cubepos -= base_shift;
+		cubepos *= invscale;
+		cubepos += transf.shift;
+		qpos[i].x = cubepos.x * ((1 << 16) - 1);
+		qpos[i].y = cubepos.y * ((1 << 16) - 1);
+		qpos[i].z = cubepos.z * ((1 << 16) - 1);
+	}
+	uint32_t *indices = data.indices + mesh.index_offset;
+	//void *vertices = (float *)(data.positions + mesh.vertex_offset);
+	//size_t vertex_size = sizeof(Vec3);
+	void *vertices = qpos.data;
+	size_t vertex_size = sizeof(TVec3<uint16_t>);
+	TArray<uint8_t> vbuf(meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
+	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices, vertex_count, vertex_size));
+	TArray<uint8_t> ibuf(meshopt_encodeIndexBufferBound(index_count, vertex_count));
+	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices, index_count));
+
+	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "meshopt");
+	FILE *f = fopen(fname, "wb");
+	int ret = (f == NULL)
+		|| fwrite(vbuf.data, vbuf.size, 1, f) != 1 
+		|| fwrite(ibuf.data, ibuf.size, 1, f) != 1
+		? -1 : 0;
+	fclose(f);
+	free(fname);
+	return (ret);
+}
+
 
 int write_final_mesh(const Mesh &mesh, const MBuf &data, const struct Cfg &cfg)
 {
@@ -647,7 +710,18 @@ int main(int argc, char **argv)
 		printf("Error in Simplification\n");
 		return (-1);
 	}
+	/* Apply optimization filter */
+	if (cfg.optimize && optimize_mesh(mesh, data, cfg)) {
+		printf("Error in Mesh Optimization\n");
+		return (-1);
+	}
 
+	/* Save final mesh */
+	if (cfg.encode && quantize_encode_mesh(mesh, data, cfg, transf)) {
+		printf("Error in mesh encoding\n");
+		return (-1);
+	}
+	
 	write_final_mesh(mesh, data, cfg);
 
 	printf("\n------ Finished with %04d %04d ------\n", cfg.x0, cfg.y0);
