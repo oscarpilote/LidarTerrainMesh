@@ -192,7 +192,8 @@ static inline bool filter_point(const struct LasPoint &p)
 	/* 100m boundary buffer size */
 	int bd = 10000;
 	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
-		   (p.y < 100000 + bd) && (p.classification == 2);
+		   (p.y < 100000 + bd) &&
+		   (p.classification == 2 || p.classification == 9);
 	return (ret);
 }
 
@@ -557,8 +558,8 @@ static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
 	write_inria(fin, mesh, data);
 
 	const char *format =
-	    "mmgs -in %s -out %s -hausd %.1f -hgrad %.1f -nr -v %d";
-	int len = strlen(fin) + strlen(fout) + strlen(format) + 8;
+	    "mmgs -in %s -out %s -hausd %.3f -hgrad %.3f -nr -v %d";
+	int len = strlen(fin) + strlen(fout) + strlen(format) + 16;
 
 	char *cmd = (char *)calloc(len, sizeof(*cmd));
 	snprintf(cmd, len, format, fin, fout, cfg.hausd, cfg.hgrad,
@@ -566,7 +567,7 @@ static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
 	int ret = system(cmd);
 
 	snprintf(cmd, len, "rm %s", fin);
-	system(cmd);
+	// system(cmd);
 
 	if (!ret) {
 		read_inria(mesh, data, fout);
@@ -591,15 +592,18 @@ int optimize_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 	uint32_t vertex_count = mesh.vertex_count;
 	float *vertices = (float *)(data.positions + mesh.vertex_offset);
 	size_t vertex_size = sizeof(Vec3);
-	meshopt_optimizeVertexCache(indices, indices, mesh.index_count, mesh.vertex_count);
+	meshopt_optimizeVertexCache(indices, indices, mesh.index_count,
+				    mesh.vertex_count);
 	/* TODO This only work for POS only meshes, use
 	 * meshopt_optimizeVertexFetchRemap instead
 	 * */
-	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices, vertex_count, vertex_size);
+	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices,
+				    vertex_count, vertex_size);
 	return (0);
 }
 
-int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg, const Transform &transf)
+int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg,
+			 const Transform &transf)
 {
 	uint32_t index_count = mesh.index_count;
 	uint32_t vertex_count = mesh.vertex_count;
@@ -617,26 +621,33 @@ int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg, const Transform
 		qpos[i].z = cubepos.z * ((1 << 16) - 1);
 	}
 	uint32_t *indices = data.indices + mesh.index_offset;
-	//void *vertices = (float *)(data.positions + mesh.vertex_offset);
-	//size_t vertex_size = sizeof(Vec3);
+	// void *vertices = (float *)(data.positions + mesh.vertex_offset);
+	// size_t vertex_size = sizeof(Vec3);
 	void *vertices = qpos.data;
 	size_t vertex_size = sizeof(TVec3<uint16_t>);
-	TArray<uint8_t> vbuf(meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
-	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices, vertex_count, vertex_size));
-	TArray<uint8_t> ibuf(meshopt_encodeIndexBufferBound(index_count, vertex_count));
-	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices, index_count));
+	TArray<uint8_t> vbuf(
+	    meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
+	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices,
+					       vertex_count, vertex_size));
+	TArray<uint8_t> ibuf(
+	    meshopt_encodeIndexBufferBound(index_count, vertex_count));
+	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices,
+					      index_count));
+
+	printf("Sizes : %.1f%% (vertex) %.1fzu%% (index)\n",
+	       ((float)vbuf.size / (ibuf.size + vbuf.size)),
+	       ((float)ibuf.size / (ibuf.size + vbuf.size)));
 
 	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "meshopt");
 	FILE *f = fopen(fname, "wb");
-	int ret = (f == NULL)
-		|| fwrite(vbuf.data, vbuf.size, 1, f) != 1 
-		|| fwrite(ibuf.data, ibuf.size, 1, f) != 1
-		? -1 : 0;
+	int ret = (f == NULL) || fwrite(vbuf.data, vbuf.size, 1, f) != 1 ||
+			  fwrite(ibuf.data, ibuf.size, 1, f) != 1
+		      ? -1
+		      : 0;
 	fclose(f);
 	free(fname);
 	return (ret);
 }
-
 
 int write_final_mesh(const Mesh &mesh, const MBuf &data, const struct Cfg &cfg)
 {
@@ -721,7 +732,7 @@ int main(int argc, char **argv)
 		printf("Error in mesh encoding\n");
 		return (-1);
 	}
-	
+
 	write_final_mesh(mesh, data, cfg);
 
 	printf("\n------ Finished with %04d %04d ------\n", cfg.x0, cfg.y0);
