@@ -192,8 +192,8 @@ static void optimize_mesh(Mesh &mesh, MBuf &data)
 	/* TODO This only work for POS only meshes, use
 	 * meshopt_optimizeVertexFetchRemap instead
 	 * */
-	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices,
-				    vertex_count, vertex_size);
+	mesh.vertex_count = meshopt_optimizeVertexFetch(vertices, 
+			indices, index_count, vertices, vertex_count, vertex_size);
 }
 
 struct Transform {
@@ -557,7 +557,7 @@ static void recut_mesh(Mesh &mesh, MBuf &data, const struct Transform &transf)
 		Vec3 p2 = data.positions[i2];
 		Vec3 bary = (p0 + p1 + p2) * (1 / 3.f);
 		if (bary.x < transf.shift.x || bary.x > 1.f - transf.shift.x ||
-		    bary.y < transf.shift.x || bary.y > 1.f - transf.shift.y) {
+		    bary.y < transf.shift.y || bary.y > 1.f - transf.shift.y) {
 			continue;
 		}
 		data.indices[new_index_count++] = i0;
