@@ -6,8 +6,10 @@
 #include <math.h>
 #include <string.h>
 
+#include <stdio.h>
+
 #ifndef TRACE
-#define TRACE 0
+#define TRACE 1
 #endif
 
 #if TRACE
@@ -421,6 +423,8 @@ static float rescalePositions(Vector3* result, const float* vertex_positions_dat
 			result[i].y = (result[i].y - minv[1]) * scale;
 			result[i].z = (result[i].z - minv[2]) * scale;
 		}
+
+		printf("Scale : %e, Min : %e %e %e\n", scale, minv[0], minv[1], minv[2]);
 	}
 
 	return extent;
@@ -878,6 +882,7 @@ static size_t performEdgeCollapses(unsigned int* collapse_remap, unsigned char* 
 
 		TRACESTATS(0);
 
+		//printf("Collapse error : %g\n", c.error);
 		if (c.error > error_limit)
 			break;
 

@@ -32,53 +32,58 @@
 struct Cfg {
 	int x0;
 	int y0;
-	int depth;
-	int weight;
 	char base_dir[128];
 	char out_dir[128];
-	int x0_base;
-	int y0_base;
-	bool verbose;
-	bool simplify;
-	bool optimize;
-	bool encode;
+	int depth;
+	int weight;
+	float simp_error;
 	float hausd;
 	float hgrad;
+	bool clean;
+	bool verbose;
+	bool optimize;
+	bool encode;
+	int x0_base;
+	int y0_base;
 };
 
 static int process_args(int argc, const char **argv, struct Cfg &cfg)
 {
 	if (argc < 3) {
-		printf("Syntax : swiss_lidar x y [depth=10] [weight=8] "
-		       "[base_dir=.]\n");
+		printf("Syntax : swiss_lidar x y [...]\n");
 		return (-1);
 	}
 	cfg.x0 = atoi(argv[1]);
 	cfg.y0 = atoi(argv[2]);
-	cfg.depth = (argc >= 4) ? atoi(argv[3]) : 10;
-	cfg.weight = (argc >= 5) ? atoi(argv[4]) : 8;
-	if (argc >= 6) {
-		if (strlen(argv[5]) > 127) {
+	if (argc >= 4) {
+		if (strlen(argv[3]) > 127) {
 			printf("Base_dir size overflow (max 127)\n");
 			return (-1);
 		}
-		strncpy(cfg.base_dir, argv[5], 127);
+		strncpy(cfg.base_dir, argv[3], 127);
+	} else {
+		strcpy(cfg.base_dir, ".");
 	}
-	if (argc >= 7) {
-		if (strlen(argv[6]) > 127) {
+	if (argc >= 5) {
+		if (strlen(argv[4]) > 127) {
 			printf("Out_dir size overflow (max 127)\n");
 			return (-1);
 		}
-		strncpy(cfg.out_dir, argv[6], 127);
+		strncpy(cfg.out_dir, argv[4], 127);
+	} else {
+		strcpy(cfg.base_dir, ".");
 	}
-	cfg.x0_base = (argc >= 8) ? atoi(argv[7]) : 0;
-	cfg.y0_base = (argc >= 9) ? atoi(argv[8]) : 0;
-	cfg.verbose = (argc >= 10) ? atoi(argv[9]) : 1;
-	cfg.simplify = (argc >= 11) ? atoi(argv[10]) : 0;
-	cfg.optimize = (argc >= 12) ? atoi(argv[11]) : 0;
-	cfg.encode = (argc >= 13) ? atoi(argv[12]) : 0;
-	cfg.hausd = (argc >= 14) ? atof(argv[13]) : 0.15f;
-	cfg.hgrad = (argc >= 15) ? atof(argv[14]) : 5.f;
+	cfg.depth  = (argc >= 6) ? atoi(argv[5]) : 10;
+	cfg.weight = (argc >= 7) ? atoi(argv[6]) : 8;
+	cfg.simp_error = (argc >= 8) ? atof(argv[7]) : 1e-4; 
+	cfg.hausd = (argc >= 9) ? atof(argv[8]) : 0.15f;
+	cfg.hgrad = (argc >= 10) ? atof(argv[9]) : 5.f;
+	cfg.clean = (argc >= 11) ? atoi(argv[10]) : 0;
+	cfg.verbose = (argc >= 12) ? atoi(argv[11]) : 1;
+	cfg.optimize = (argc >= 13) ? atoi(argv[12]) : 1;
+	cfg.encode = (argc >= 14) ? atoi(argv[13]) : 0;
+	cfg.x0_base = (argc >= 15) ? atoi(argv[14]) : cfg.x0;
+	cfg.y0_base = (argc >= 16) ? atoi(argv[15]) : cfg.y0;
 
 	return (0);
 }
@@ -93,10 +98,8 @@ static void print_cfg(struct Cfg &cfg)
 	printf("Data  dir   : %s\n", cfg.base_dir);
 	printf("Output dir  : %s\n", cfg.out_dir);
 	printf("Verbosity   : %d\n", cfg.verbose ? 1 : 0);
-	if (cfg.simplify) {
-		printf("Simplify    : hausd=%f , hgrad=%f\n", cfg.hausd,
-		       cfg.hgrad);
-	}
+	printf("Simplify    : meshopt=%f,  hausd=%f , hgrad=%f\n", 
+			cfg.simp_error, cfg.hausd, cfg.hgrad);
 }
 
 static char *las_filename(int x, int y, const char *base_dir)
@@ -162,14 +165,78 @@ static char *mesh_filename(int x, int y, const char *base_dir, const char *ext)
 
 /******************************************************************************
  *
- * II. Functions related to creation of the oriented point set.
+ * II. Utility fonctions.
  *
  ******************************************************************************/
+
+static int write_mesh(const Mesh &mesh, const MBuf &data, const struct Cfg &cfg,
+		const char *ext)
+{
+
+	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, ext);
+	write_ply(fname, mesh, data);
+	free(fname);
+
+	return (0);
+}
+
+static void optimize_mesh(Mesh &mesh, MBuf &data)
+{
+	uint32_t index_count = mesh.index_count;
+	uint32_t *indices = data.indices + mesh.index_offset;
+	uint32_t vertex_count = mesh.vertex_count;
+	float *vertices = (float *)(data.positions + mesh.vertex_offset);
+	size_t vertex_size = sizeof(Vec3);
+	meshopt_optimizeVertexCache(indices, indices, mesh.index_count,
+				    mesh.vertex_count);
+	/* TODO This only work for POS only meshes, use
+	 * meshopt_optimizeVertexFetchRemap instead
+	 * */
+	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices,
+				    vertex_count, vertex_size);
+}
 
 struct Transform {
 	float scale;
 	Vec3 shift;
 };
+
+int write_transform(const struct Transform &t, const struct Cfg &cfg)
+{
+	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "transf");
+	FILE *f = fopen(fname, "w");
+	if (!f) {
+		free(fname);
+		return (-1);
+	}
+	fprintf(f, "Scale %g\n", t.scale);
+	fprintf(f, "Offset %g %g %g\n", t.shift.x, t.shift.y, t.shift.z);
+	fclose(f);
+	free(fname);
+	return (0);
+}
+
+int read_transform(struct Transform &t, const struct Cfg &cfg)
+{
+	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "transf");
+	FILE *f = fopen(fname, "r");
+	if (!f) {
+		free(fname);
+		return (-1);
+	}
+	fscanf(f, "Scale %g\n", &t.scale);
+	fscanf(f, "Offset %g %g %g\n", &t.shift.x, &t.shift.y, &t.shift.z);
+	fclose(f);
+	free(fname);
+	return (0);
+}
+
+/******************************************************************************
+ *
+ * II. Functions related to creation of the oriented point set.
+ *
+ ******************************************************************************/
+
 
 static inline int get_source_idx(const TArray<int> &sources, int source_id)
 {
@@ -350,14 +417,28 @@ static void nml_cb(float progress)
 	fflush(stdout);
 }
 
-static int build_oriented_point_set(Mesh &mesh, MBuf &data,
-				    struct Transform &transf,
-				    const struct Cfg &cfg)
+/* Gather neighboring las files to build a 100m buffer of the
+ * target tile, and then compute combined position + normal point
+ * set from it. Normal orientation reconstruction combines geometric
+ * and lidar source statistics which are computed on their own.
+ */
+static int build_oriented_point_set(const struct Cfg &cfg)
 {
+	/* Re-use existing output ? */
+	char *recon_in = oriented_points_filename(cfg.x0, cfg.y0, cfg.out_dir);
+	FILE *f;
+	if ((f = fopen(recon_in, "rb")) != NULL) {
+		printf("Using cached data in %s\n", recon_in);
+		fclose(f);
+		free(recon_in);
+		return 0;
+	}
+
 	/* Read data */
 	size_t source_num;
 	TArray<struct LasPoint> points;
 	if (read_and_filter_data(source_num, points, cfg)) {
+		free(recon_in);
 		return (-1);
 	}
 	size_t point_num = points.size;
@@ -375,11 +456,15 @@ static int build_oriented_point_set(Mesh &mesh, MBuf &data,
 
 	printf("Set positions & transform  : ");
 	/* Rescale and offset positions into buffer */
+	Mesh mesh;
 	mesh.vertex_count = point_num;
+	MBuf data;
 	data.vtx_attr = VtxAttr::PN;
 	data.reserve_vertices(point_num);
+	struct Transform transf;
 	if (send_points_to_unit_cube(points, data.positions, transf)) {
 		printf("Altitude span too large !\n");
+		free(recon_in);
 		return (-1);
 	}
 
@@ -444,6 +529,10 @@ static int build_oriented_point_set(Mesh &mesh, MBuf &data,
 	data.normals[mesh.vertex_count++] = Vec3{0.f, 0.f, 1.f};
 	data.positions[mesh.vertex_count] = Vec3{1.f, 1.f, 1.f};
 	data.normals[mesh.vertex_count++] = Vec3{0.f, 0.f, 1.f};
+	
+	write_ply(recon_in, mesh, data);
+	write_transform(transf, cfg);
+	free(recon_in);
 
 	return (0);
 }
@@ -454,14 +543,63 @@ static int build_oriented_point_set(Mesh &mesh, MBuf &data,
  *
  ******************************************************************************/
 
-static int launch_poisson_recon(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+static void recut_mesh(Mesh &mesh, MBuf &data, const struct Transform &transf)
 {
+	/* Remove triangles in buffered part */
+	/* Note: here we have all offsets 0 so forget about them */
+	size_t new_index_count = 0;
+	for (size_t i = 0; i < mesh.index_count / 3; ++i) {
+		uint32_t i0 = data.indices[3 * i + 0];
+		uint32_t i1 = data.indices[3 * i + 1];
+		uint32_t i2 = data.indices[3 * i + 2];
+		Vec3 p0 = data.positions[i0];
+		Vec3 p1 = data.positions[i1];
+		Vec3 p2 = data.positions[i2];
+		Vec3 bary = (p0 + p1 + p2) * (1 / 3.f);
+		if (bary.x < transf.shift.x || bary.x > 1.f - transf.shift.x ||
+		    bary.y < transf.shift.x || bary.y > 1.f - transf.shift.y) {
+			continue;
+		}
+		data.indices[new_index_count++] = i0;
+		data.indices[new_index_count++] = i1;
+		data.indices[new_index_count++] = i2;
+	}
+	mesh.index_count = new_index_count;
+}
+
+static void rescale_and_offset_mesh(Mesh &mesh, MBuf &data, 
+		const struct Transform &transf, const struct Cfg &cfg)
+{
+	/* Inverse transform points + shift relative to base */
+	/* TODO : should be eventually removed and use scene
+	 *        object placement and scaling instead
+	 */
+	Vec3 base_shift{(cfg.x0 - cfg.x0_base) * 1000.f,
+			(cfg.y0 - cfg.y0_base) * 1000.f, 0};
+	float scale = (1 / (100 * transf.scale)); /* in meters */
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		data.positions[i] = data.positions[i] - transf.shift;
+		data.positions[i] *= scale;
+		data.positions[i] += base_shift;
+	}
+}
+
+static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+{
+	/* Re-use existing output ? */
+	char *recon_out = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "poisson.ply");
+	FILE *f;
+	if ((f = fopen(recon_out, "rb")) != NULL) {
+		printf("Using cached data in %s\n", recon_out);
+		load_ply(mesh, data, recon_out);
+		printf("A total of %.2f MTri.\n",
+			1e-6 * mesh.index_count / 3);
+		free(recon_out);
+		fclose(f);
+		return 0;
+	}
+
 	char *recon_in = oriented_points_filename(cfg.x0, cfg.y0, cfg.out_dir);
-
-	/* TODO: Avoid going to disk */
-	write_ply(recon_in, mesh, data);
-
-	char *recon_out = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "ply");
 	const char *format =
 	    "poissonrecon --in %s --out %s --scale 1.0 --depth %d "
 	    "--pointWeight %d --threads 8 %s";
@@ -473,13 +611,30 @@ static int launch_poisson_recon(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 		 cfg.verbose ? "--verbose" : "");
 	int ret = system(cmd);
 
-	snprintf(cmd, len, "rm %s", recon_in);
-	system(cmd);
+	if (cfg.clean) {
+		snprintf(cmd, len, "rm %s", recon_in);
+		system(cmd);
+	}
 
 	if (!ret) {
 		load_ply(mesh, data, recon_out);
+		printf("A total of %.2f MTri after poisson reconstruct.\n",
+			1e-6 * mesh.index_count / 3);
+		struct Transform transf;
+		read_transform(transf, cfg);
+		recut_mesh(mesh, data, transf);
+		printf("A total of %.2f MTri after buffered boundary cut.\n",
+			1e-6 * mesh.index_count / 3);
+		rescale_and_offset_mesh(mesh, data, transf, cfg);
+		if (cfg.clean) {
+			snprintf(cmd, len, "rm %s", recon_out);
+			system(cmd);
+		} else {
+			optimize_mesh(mesh, data);
+			write_ply(recon_out, mesh, data);
+		}
 	}
-
+	
 	free(cmd);
 	free(recon_out);
 	free(recon_in);
@@ -487,7 +642,29 @@ static int launch_poisson_recon(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	return (ret);
 }
 
-static int postprocess_surface_mesh(Mesh &mesh, MBuf &data,
+static int simplify_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+{
+	float tol = cfg.simp_error;
+	printf("Tol : %g\n", tol);
+	mesh.index_count = meshopt_simplify(data.indices, data.indices, 
+			mesh.index_count, (const float *)data.positions, 
+			mesh.vertex_count, sizeof(Vec3), mesh.index_count * 3 / 4, tol, 0, NULL);
+
+	mesh.vertex_count = meshopt_optimizeVertexFetch(data.positions, 
+			data.indices, mesh.index_count, data.positions, 
+			mesh.vertex_count, sizeof(Vec3));
+	
+	write_mesh(mesh, data, cfg, "meshopt.ply"); 
+	
+	printf("After meshopt simplification : %.1f MTri and %.1f MVert\n", 
+		1e-6 * mesh.index_count / 3,
+		1e-6 * mesh.vertex_count);
+
+	return (0);
+}
+
+#if 0
+static int postprocess_surface_mesh_old(Mesh &mesh, MBuf &data,
 				    const struct Cfg &cfg,
 				    const struct Transform &transf)
 {
@@ -546,9 +723,9 @@ static int postprocess_surface_mesh(Mesh &mesh, MBuf &data,
 
 	return (0);
 }
+#endif
 
-static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
-				      const struct Cfg &cfg)
+static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 {
 	char *fin = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "mesh");
 	char *fout = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "out.mesh");
@@ -567,15 +744,18 @@ static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
 	int ret = system(cmd);
 
 	snprintf(cmd, len, "rm %s", fin);
-	// system(cmd);
+	system(cmd);
 
 	if (!ret) {
 		read_inria(mesh, data, fout);
-		snprintf(cmd, len, "rm %s", fout);
-		system(cmd);
-		snprintf(cmd, len, "rm %s", fsol);
-		system(cmd);
+		if (!cfg.clean)
+			write_mesh(mesh, data, cfg, "mmgs.ply"); 
 	}
+	
+	snprintf(cmd, len, "rm -f %s", fout);
+	system(cmd);
+	snprintf(cmd, len, "rm -f %s", fsol);
+	system(cmd);
 
 	free(cmd);
 	free(fsol);
@@ -585,26 +765,15 @@ static int launch_mesh_simplification(Mesh &mesh, MBuf &data,
 	return (ret);
 }
 
-int optimize_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
-{
-	uint32_t index_count = mesh.index_count;
-	uint32_t *indices = data.indices + mesh.index_offset;
-	uint32_t vertex_count = mesh.vertex_count;
-	float *vertices = (float *)(data.positions + mesh.vertex_offset);
-	size_t vertex_size = sizeof(Vec3);
-	meshopt_optimizeVertexCache(indices, indices, mesh.index_count,
-				    mesh.vertex_count);
-	/* TODO This only work for POS only meshes, use
-	 * meshopt_optimizeVertexFetchRemap instead
-	 * */
-	meshopt_optimizeVertexFetch(vertices, indices, index_count, vertices,
-				    vertex_count, vertex_size);
-	return (0);
-}
 
-int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg,
-			 const Transform &transf)
+int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 {
+	struct Transform transf;
+	if (read_transform(transf, cfg)) {
+		printf("Could not read transform\n");
+		return (-1);
+	}
+
 	uint32_t index_count = mesh.index_count;
 	uint32_t vertex_count = mesh.vertex_count;
 	Vec3 base_shift{(cfg.x0 - cfg.x0_base) * 1000.f,
@@ -638,7 +807,7 @@ int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg,
 	       ((float)vbuf.size / (ibuf.size + vbuf.size)),
 	       ((float)ibuf.size / (ibuf.size + vbuf.size)));
 
-	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "meshopt");
+	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, "bin");
 	FILE *f = fopen(fname, "wb");
 	int ret = (f == NULL) || fwrite(vbuf.data, vbuf.size, 1, f) != 1 ||
 			  fwrite(ibuf.data, ibuf.size, 1, f) != 1
@@ -649,17 +818,6 @@ int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg,
 	return (ret);
 }
 
-int write_final_mesh(const Mesh &mesh, const MBuf &data, const struct Cfg &cfg)
-{
-
-	const char *ext = cfg.simplify ? "mmgs.ply" : "ply";
-
-	char *fname = mesh_filename(cfg.x0, cfg.y0, cfg.out_dir, ext);
-	write_ply(fname, mesh, data);
-	free(fname);
-
-	return (0);
-}
 
 /******************************************************************************
  *
@@ -677,19 +835,14 @@ int main(int argc, char **argv)
 	if (process_args(argc, (const char **)argv, cfg)) {
 		return (-1);
 	}
+
 	printf("\n------ Dealing with %04d %04d ------\n", cfg.x0, cfg.y0);
 	print_cfg(cfg);
 
-	/* Gather neighboring las files to build a 100m buffer of the
-	 * target tile, and then compute combined position + normal point
-	 * set from it. Normal orientation reconstruction combines geometric
-	 * and lidar source statistics which are computed on their own.
-	 */
 	printf("\n");
 	printf("I. Building oriented point set :\n");
 	printf("--------------------------------\n");
-	struct Transform transf = {1, Vec3::Zero};
-	if (build_oriented_point_set(mesh, data, transf, cfg)) {
+	if (build_oriented_point_set(cfg)) {
 		printf("No data found.\n");
 		return (-1);
 	}
@@ -697,43 +850,35 @@ int main(int argc, char **argv)
 	printf("\n");
 	printf("II. Building surface mesh from point set :\n");
 	printf("------------------------------------------\n");
-	/* Launch 3rd party screened Poisson Reconstruction.
-	 */
-	if (launch_poisson_recon(mesh, data, cfg)) {
+
+	if (build_surface_mesh(mesh, data, cfg)) {
 		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
-	printf("Poisson reconstruction completed : a total of %.1f MTri and "
-	       "%.1f MVert.\n",
-	       1e-6 * mesh.index_count / 3, 1e-6 * mesh.vertex_count);
 
 	printf("\n");
 	printf("III. Postprocessing surface mesh.\n");
 	printf("---------------------------------\n");
-	/* Remove buffered boundary and apply some first cleaning */
-	if (postprocess_surface_mesh(mesh, data, cfg, transf)) {
-		printf("Error in Postprocessing\n");
-		return (-1);
+	if (cfg.simp_error > 0) {
+		simplify_mesh(mesh, data, cfg);
 	}
+	if (cfg.hausd > 0) {
+		if (improve_mesh_quality(mesh, data, cfg)) {
+			printf("Error in MMGS\n");
+			return (-1);
+		}
+	}
+	if (cfg.optimize)
+		optimize_mesh(mesh, data);
 
-	/* Apply simplification filter */
-	if (cfg.simplify && launch_mesh_simplification(mesh, data, cfg)) {
-		printf("Error in Simplification\n");
-		return (-1);
-	}
-	/* Apply optimization filter */
-	if (cfg.optimize && optimize_mesh(mesh, data, cfg)) {
-		printf("Error in Mesh Optimization\n");
-		return (-1);
-	}
-
+	
 	/* Save final mesh */
-	if (cfg.encode && quantize_encode_mesh(mesh, data, cfg, transf)) {
+	if (cfg.encode && quantize_encode_mesh(mesh, data, cfg)) {
 		printf("Error in mesh encoding\n");
 		return (-1);
 	}
 
-	write_final_mesh(mesh, data, cfg);
+	write_mesh(mesh, data, cfg, "final.ply");
 
 	printf("\n------ Finished with %04d %04d ------\n", cfg.x0, cfg.y0);
 	return (0);

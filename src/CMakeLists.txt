@@ -13,6 +13,7 @@ add_library(meshoptimizer
 	../extern/meshoptimizer/src/vcacheoptimizer.cpp
 	../extern/meshoptimizer/src/indexcodec.cpp
 	../extern/meshoptimizer/src/vertexcodec.cpp
+	../extern/meshoptimizer/src/simplifier.cpp
 	)
 
 add_executable(swiss_lidar
