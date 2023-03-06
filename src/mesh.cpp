@@ -17,6 +17,7 @@ void MBuf::clear()
 	MEMFREE(normals);
 	MEMFREE(uv[0]);
 	MEMFREE(uv[1]);
+	MEMFREE(colors);
 	MEMFREE(remap);
 	vtx_capacity = 0;
 }
@@ -59,6 +60,10 @@ void MBuf::reserve_vertices(size_t num, bool shrink)
 		REALLOC_NUM(uv[1], num);
 	}
 
+	if (vtx_attr & VtxAttr::COL) {
+		REALLOC_NUM(colors, num);
+	}
+
 	if (vtx_attr & VtxAttr::MAP) {
 		REALLOC_NUM(remap, num);
 	}
@@ -66,17 +71,15 @@ void MBuf::reserve_vertices(size_t num, bool shrink)
 	vtx_capacity = num;
 }
 
-void MBuf::update_vtx_attr(uint32_t attr)
+void MBuf::add_vtx_attr(uint32_t attr)
 {
 	uint32_t new_attr = attr & ~vtx_attr;
-	uint32_t del_attr = vtx_attr & ~attr;
 
-	vtx_attr = attr;
-
-	if (!vtx_capacity)
-		return;
+	vtx_attr |= attr;
 
 	size_t num = vtx_capacity;
+	if (!num)
+		return;
 
 	if (new_attr & VtxAttr::POS) {
 		REALLOC_NUM(positions, num);
@@ -89,6 +92,40 @@ void MBuf::update_vtx_attr(uint32_t attr)
 	}
 	if (new_attr & VtxAttr::UV1) {
 		REALLOC_NUM(uv[1], num);
+	}
+	if (new_attr & VtxAttr::COL) {
+		REALLOC_NUM(colors, num);
+	}
+	if (new_attr & VtxAttr::MAP) {
+		REALLOC_NUM(remap, num);
+	}
+}
+
+void MBuf::update_vtx_attr(uint32_t attr)
+{
+	uint32_t new_attr = attr & ~vtx_attr;
+	uint32_t del_attr = vtx_attr & ~attr;
+
+	vtx_attr = attr;
+
+	size_t num = vtx_capacity;
+	if (!num)
+		return;
+
+	if (new_attr & VtxAttr::POS) {
+		REALLOC_NUM(positions, num);
+	}
+	if (new_attr & VtxAttr::NML) {
+		REALLOC_NUM(normals, num);
+	}
+	if (new_attr & VtxAttr::UV0) {
+		REALLOC_NUM(uv[0], num);
+	}
+	if (new_attr & VtxAttr::UV1) {
+		REALLOC_NUM(uv[1], num);
+	}
+	if (new_attr & VtxAttr::COL) {
+		REALLOC_NUM(colors, num);
 	}
 	if (new_attr & VtxAttr::MAP) {
 		REALLOC_NUM(remap, num);
@@ -105,6 +142,9 @@ void MBuf::update_vtx_attr(uint32_t attr)
 	}
 	if (del_attr & VtxAttr::UV1) {
 		MEMFREE(uv[1]);
+	}
+	if (del_attr & VtxAttr::COL) {
+		MEMFREE(colors);
 	}
 	if (del_attr & VtxAttr::MAP) {
 		MEMFREE(remap);

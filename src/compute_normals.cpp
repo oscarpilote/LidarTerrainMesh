@@ -7,13 +7,13 @@
 
 #include "array.h"
 #include "hash_table.h"
+#include "kd_tree.h"
 #include "math_utils.h"
 #include "sys_utils.h"
 
 #include "las_normal.h"
 #include "las_read.h"
 #include "las_source.h"
-#include "las_tree.h"
 #include "mesh.h"
 #include "mesh_ply.h"
 
@@ -181,8 +181,8 @@ int main(int argc, char **argv)
 	/* Build kd-tree for filtered point cloud.
 	 */
 	printf("Building kd-tree.\n");
-	struct LasCoords coords = {data.positions, point_num};
-	LasTree tree(3, coords, 10);
+	const float *pos = (const float *)data.positions;
+	KdTree<3> tree(3, KdCoords<3>{pos, point_num}, 10);
 
 	/* Build normals using geometry and scanlines*/
 	TArray<float> qual(point_num);

@@ -1,14 +1,14 @@
+#include "kd_tree.h"
 #include "plane_fitting.h"
 #include "vec3.h"
 
 #include "las_point_cloud.h"
 #include "las_source.h"
-#include "las_tree.h"
 
 #include "las_normal.h"
 
 void estim_unoriented_nml(const Vec3 *pos, size_t point_num, Vec3 *nml,
-			  float *qual, const LasTree &tree,
+			  float *qual, const KdTree<3> &tree,
 			  void (*cb)(float progress), int probes)
 {
 	TArray<unsigned> knn_idx(probes);
@@ -33,15 +33,18 @@ void estim_unoriented_nml(const Vec3 *pos, size_t point_num, Vec3 *nml,
 	}
 }
 
-size_t orient_nml_with_z(Vec3 *nml, EOrient *oriented, size_t point_num)
+size_t orient_nml_with_z(Vec3 *nml, EOrient *oriented, size_t point_num,
+			 const float *qual, float tol)
 {
 	size_t unsettled = 0;
 	for (size_t i = 0; i < point_num; ++i) {
-		if (fabs(nml[i].z) > NML_Z_THRESH) {
+		if (oriented[i] >= EPositiveZ)
+			continue;
+		if (fabs(nml[i].z) > tol + 2 * (1 - qual[i])) {
 			oriented[i] = EPositiveZ;
 			if (nml[i].z < 0)
 				nml[i] *= -1;
-		} else {
+		} else if (oriented[i] == ENone) {
 			unsettled++;
 		}
 	}
@@ -73,7 +76,7 @@ size_t orient_nml_with_scan(const LasPoint *points, size_t point_num,
 			oriented[i] = EScanline;
 			if (test > 0)
 				nml[i] *= -1;
-		} else {
+		} else if (oriented[i] == ENone) {
 			unsettled++;
 		}
 	}
@@ -81,7 +84,7 @@ size_t orient_nml_with_scan(const LasPoint *points, size_t point_num,
 }
 
 size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
-			  const LasTree &tree, const float *qual, Vec3 *nml,
+			  const KdTree<3> &tree, const float *qual, Vec3 *nml,
 			  EOrient *oriented, size_t probes, float tol)
 {
 	size_t newly_settled = 0;

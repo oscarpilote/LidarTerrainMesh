@@ -25,12 +25,13 @@ add_executable(swiss_lidar
 	mesh_inria.cpp
 	vertex_remap.cpp
 	mesh_utils.cpp
+	swiss_raster.cpp
 	swiss_lidar.cpp
 	)
 
 target_compile_features(swiss_lidar PRIVATE cxx_std_17)
 target_compile_options(swiss_lidar PRIVATE -Wall)
-target_link_libraries(swiss_lidar miniply meshoptimizer)
+target_link_libraries(swiss_lidar miniply meshoptimizer gdal)
 
 add_executable(compute_normals
 	las_read.cpp

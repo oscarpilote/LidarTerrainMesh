@@ -61,7 +61,7 @@ static int skip_section(char *line, FILE *f)
 	fgets(line, LINE, f);
 	unsigned dummy_count;
 	if (sscanf(line, "%d", &dummy_count) != 1) {
-		printf("Could not read dummy count.\n");
+		printf("Could not read dummy count : %s\n", line);
 		return (-1);
 	}
 	for (size_t i = 0; i < dummy_count; ++i) {
@@ -146,7 +146,7 @@ int write_inria(const char *fname, const Mesh &mesh, const MBuf &data)
 	fprintf(f, "Vertices\n");
 	fprintf(f, "%d\n", mesh.vertex_count);
 	for (size_t i = 0; i < mesh.vertex_count; ++i) {
-		fprintf(f, "%lf %lf %lf 0\n", data.positions[i].x,
+		fprintf(f, "%.12g %.12g %.12g 0\n", data.positions[i].x,
 			data.positions[i].y, data.positions[i].z);
 	}
 	if (data.vtx_attr & VtxAttr::NML) {
@@ -154,7 +154,7 @@ int write_inria(const char *fname, const Mesh &mesh, const MBuf &data)
 		fprintf(f, "Normals\n");
 		fprintf(f, "%d\n", mesh.vertex_count);
 		for (size_t i = 0; i < mesh.vertex_count; ++i) {
-			fprintf(f, "%lf %lf %lf\n", data.normals[i].x,
+			fprintf(f, "%.12g %.12g %.12g\n", data.normals[i].x,
 				data.normals[i].y, data.normals[i].z);
 		}
 	}

@@ -14,12 +14,8 @@
 #include "mesh.h"
 #include "mesh_ply.h"
 
-int load_ply(Mesh &mesh, MBuf &data, const char *fname)
+int load_ply(Mesh &mesh, MBuf &data, const char *fname, int filter)
 {
-
-	// TODO : should we ?
-	data.clear();
-	mesh.clear();
 
 	using namespace miniply;
 	PLYReader reader(fname);
@@ -32,42 +28,59 @@ int load_ply(Mesh &mesh, MBuf &data, const char *fname)
 
 	while (reader.has_element() && (!got_verts || !got_faces)) {
 		if (reader.element_is(kPLYVertexElement)) {
+
 			reader.load_element();
 			uint32_t vertex_count = reader.num_rows();
-			mesh.vertex_offset = 0;
 			mesh.vertex_count = vertex_count;
 
+			uint32_t extract = 0;
 			uint32_t pos_idx[3];
-			if (reader.find_pos(pos_idx)) {
-				data.vtx_attr |= VtxAttr::POS;
+			if ((filter & VtxAttr::POS) &
+			    reader.find_pos(pos_idx)) {
+				extract |= VtxAttr::POS;
+				data.add_vtx_attr(VtxAttr::POS);
 			}
 
 			uint32_t nml_idx[3];
-			if (reader.find_normal(nml_idx)) {
-				data.vtx_attr |= VtxAttr::NML;
+			if ((filter & VtxAttr::NML) &
+			    reader.find_normal(nml_idx)) {
+				extract |= VtxAttr::NML;
+				data.add_vtx_attr(VtxAttr::NML);
 			}
-
 			uint32_t uv_idx[2];
-			if (reader.find_texcoord(uv_idx)) {
-				data.vtx_attr |= VtxAttr::UV0;
+			if ((filter & VtxAttr::UV0) &
+			    reader.find_texcoord(uv_idx)) {
+				extract |= VtxAttr::UV0;
+				data.add_vtx_attr(VtxAttr::UV0);
 			}
+			uint32_t col_idx[3];
+			if ((filter & VtxAttr::COL) &
+			    reader.find_color(col_idx)) {
+				extract |= VtxAttr::COL;
+				data.add_vtx_attr(VtxAttr::COL);
+			}
+			data.reserve_vertices(vertex_count +
+					      mesh.vertex_offset);
 
-			data.reserve_vertices(vertex_count);
-
-			if (data.vtx_attr & VtxAttr::POS) {
+			if (extract & VtxAttr::POS) {
 				reader.extract_properties(
 				    pos_idx, 3, PLYPropertyType::Float,
-				    data.positions);
+				    data.positions + mesh.vertex_offset);
 			}
-			if (data.vtx_attr & VtxAttr::NML) {
+			if (extract & VtxAttr::NML) {
 				reader.extract_properties(
 				    nml_idx, 3, PLYPropertyType::Float,
-				    data.normals);
+				    data.normals + mesh.vertex_offset);
 			}
-			if (data.vtx_attr & VtxAttr::UV0) {
+			if (extract & VtxAttr::UV0) {
 				reader.extract_properties(
 				    uv_idx, 2, PLYPropertyType::Float,
-				    data.uv[0]);
+				    data.uv[0] + mesh.vertex_offset);
+			}
+			if (extract & VtxAttr::COL) {
+				reader.extract_properties(
+				    col_idx, 3, PLYPropertyType::UChar,
+				    data.colors + mesh.vertex_offset);
 			}
 			got_verts = true;
 		} else if (reader.element_is(kPLYFaceElement)) {
@@ -85,18 +98,22 @@ int load_ply(Mesh &mesh, MBuf &data, const char *fname)
 			uint32_t index_count;
 			if (polys) {
 				index_count = reader.num_triangles(idx[0]) * 3;
-				data.reserve_indices(index_count);
+				data.reserve_indices(index_count +
+						     mesh.index_offset);
 				reader.extract_triangles(
-				    idx[0], (const float *)data.positions,
+				    idx[0],
+				    (const float *)(data.positions +
+						    mesh.vertex_offset),
 				    mesh.vertex_count, PLYPropertyType::Int,
-				    data.indices);
+				    data.indices + mesh.index_offset);
 			} else {
 				index_count = reader.num_rows() * 3;
-				data.reserve_indices(index_count);
+				data.reserve_indices(index_count +
+						     mesh.index_offset);
 				reader.extract_list_property(
-				    idx[0], PLYPropertyType::Int, data.indices);
+				    idx[0], PLYPropertyType::Int,
+				    data.indices + mesh.index_offset);
 			}
-			mesh.index_offset = 0;
 			mesh.index_count = index_count;
 			got_faces = true;
 		}
@@ -113,7 +130,7 @@ int load_ply(Mesh &mesh, MBuf &data, const char *fname)
 	return (EXIT_SUCCESS);
 }
 
-int write_ply(const char *fname, const Mesh &mesh, const MBuf &data)
+int write_ply(const char *fname, const Mesh &mesh, const MBuf &data, int filter)
 {
 	std::filebuf fbuf;
 
@@ -121,7 +138,10 @@ int write_ply(const char *fname, const Mesh &mesh, const MBuf &data)
 
 	std::ostream osb(&fbuf);
 	tinyply::PlyFile ply;
-	if ((data.vtx_attr & VtxAttr::POS) && mesh.vertex_count) {
+
+	uint32_t extract = filter & data.vtx_attr;
+
+	if ((extract & VtxAttr::POS) && mesh.vertex_count) {
 		ply.add_properties_to_element(
 		    "vertex", {"x", "y", "z"}, tinyply::Type::FLOAT32,
 		    mesh.vertex_count,
@@ -129,11 +149,27 @@ int write_ply(const char *fname, const Mesh &mesh, const MBuf &data)
 						      mesh.vertex_offset),
 		    tinyply::Type::INVALID, 0);
 	}
-	if ((data.vtx_attr & VtxAttr::NML) && mesh.vertex_count) {
+	if ((extract & VtxAttr::NML) && mesh.vertex_count) {
 		ply.add_properties_to_element(
 		    "vertex", {"nx", "ny", "nz"}, tinyply::Type::FLOAT32,
 		    mesh.vertex_count,
 		    reinterpret_cast<const uint8_t *>(data.normals +
+						      mesh.vertex_offset),
+		    tinyply::Type::INVALID, 0);
+	}
+	if ((extract & VtxAttr::UV0) && mesh.vertex_count) {
+		ply.add_properties_to_element(
+		    "vertex", {"u", "v"}, tinyply::Type::FLOAT32,
+		    mesh.vertex_count,
+		    reinterpret_cast<const uint8_t *>(data.uv[0] +
+						      mesh.vertex_offset),
+		    tinyply::Type::INVALID, 0);
+	}
+	if ((extract & VtxAttr::COL) && mesh.vertex_count) {
+		ply.add_properties_to_element(
+		    "vertex", {"red", "green", "blue"}, tinyply::Type::UINT8,
+		    mesh.vertex_count,
+		    reinterpret_cast<const uint8_t *>(data.colors +
 						      mesh.vertex_offset),
 		    tinyply::Type::INVALID, 0);
 	}

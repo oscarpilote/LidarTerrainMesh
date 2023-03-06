@@ -15,12 +15,14 @@ enum {
 	NML = 1 << 1,
 	UV0 = 1 << 2,
 	UV1 = 1 << 3,
-	MAP = 1 << 4,
+	COL = 1 << 4,
+	MAP = 1 << 5,
 	/* Some common combo */
 	P = POS,
 	PN = POS | NML,
 	PNT = POS | NML | UV0,
 	PT = POS | UV0,
+	ALL = ~0
 };
 };
 
@@ -38,11 +40,13 @@ struct MBuf {
 	Vec3 *positions = nullptr;
 	Vec3 *normals = nullptr;
 	Vec2 *uv[MAX_UV_MAPS] = {nullptr};
+	TVec3<uint8_t> *colors = nullptr;
 	uint32_t *remap = nullptr;
 
 	void clear();
 	void reserve_indices(size_t num, bool shrink = false);
 	void reserve_vertices(size_t num, bool shrink = false);
+	void add_vtx_attr(uint32_t attr);
 	void update_vtx_attr(uint32_t attr);
 };
 
