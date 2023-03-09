@@ -14,6 +14,7 @@
 
 #include "mesh.h"
 #include "mesh_inria.h"
+#include "mesh_remesh.h"
 #include "mesh_ply.h"
 #include "mesh_utils.h"
 #include "vertex_table.h"
@@ -299,7 +300,7 @@ static inline bool filter_las_point(const struct LasPoint &p)
 	/* 100m boundary buffer size */
 	int bd = 10000;
 	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
-		   (p.y < 100000 + bd) && (p.classification == 2);
+		   (p.y < 100000 + bd) && (p.classification == 2) ;
 	return (ret);
 }
 
@@ -880,6 +881,7 @@ static int simplify_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	return (0);
 }
 
+#if 0 // Old version
 static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 {
 	char *fin = get_filename(cfg.x0, cfg.y0, cfg.out_dir, "mesh");
@@ -919,6 +921,13 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 
 	return (ret);
 }
+#else
+static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+{
+	return mesh_remesh(mesh, data, cfg.hausd * 0.001, 5, false, 1);
+}
+#endif
+
 
 int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 {

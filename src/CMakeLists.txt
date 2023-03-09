@@ -23,6 +23,7 @@ add_executable(swiss_lidar
 	mesh.cpp
 	mesh_ply.cpp
 	mesh_inria.cpp
+	mesh_remesh.cpp
 	vertex_remap.cpp
 	mesh_utils.cpp
 	swiss_raster.cpp
@@ -31,7 +32,7 @@ add_executable(swiss_lidar
 
 target_compile_features(swiss_lidar PRIVATE cxx_std_17)
 target_compile_options(swiss_lidar PRIVATE -Wall)
-target_link_libraries(swiss_lidar miniply meshoptimizer gdal)
+target_link_libraries(swiss_lidar miniply meshoptimizer gdal /home/smets/Code/Extern/mmg/build/lib/libmmgs.a)
 
 add_executable(compute_normals
 	las_read.cpp
