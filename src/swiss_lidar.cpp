@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "meshoptimizer/src/meshoptimizer.h"
+#include "mmg/mmgs/libmmgs.h"
 
 #include "array.h"
 #include "hash_table.h"
@@ -14,8 +15,8 @@
 
 #include "mesh.h"
 #include "mesh_inria.h"
-#include "mesh_remesh.h"
 #include "mesh_ply.h"
+#include "mesh_remesh.h"
 #include "mesh_utils.h"
 #include "vertex_table.h"
 
@@ -39,7 +40,7 @@ struct Cfg {
 	char base_dir[128];
 	char out_dir[128];
 	int depth;
-	int weight;
+	float weight;
 	float simp_error;
 	float hausd;
 	float hgrad;
@@ -80,15 +81,15 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 		strcpy(cfg.base_dir, ".");
 	}
 	cfg.depth = (argc >= 6) ? atoi(argv[5]) : 10;
-	cfg.weight = (argc >= 7) ? atoi(argv[6]) : 8;
+	cfg.weight = (argc >= 7) ? atof(argv[6]) : 4;
 	cfg.simp_error = (argc >= 8) ? atof(argv[7]) : 1e-4;
 	cfg.hausd = (argc >= 9) ? atof(argv[8]) : 0.15f;
 	cfg.hgrad = (argc >= 10) ? atof(argv[9]) : 5.f;
 	cfg.ani = (argc >= 11) ? atoi(argv[10]) : 0;
 	cfg.clean = (argc >= 12) ? atoi(argv[11]) : 0;
-	cfg.verbose = (argc >= 13) ? atoi(argv[12]) : 0;
+	cfg.verbose = (argc >= 13) ? atoi(argv[12]) : 1;
 	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 1;
-	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 0;
+	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 1;
 	cfg.nml_confidence = (argc >= 16) ? atoi(argv[15]) : 1;
 	cfg.x0_base = (argc >= 17) ? atoi(argv[16]) : cfg.x0;
 	cfg.y0_base = (argc >= 18) ? atoi(argv[17]) : cfg.y0;
@@ -300,7 +301,8 @@ static inline bool filter_las_point(const struct LasPoint &p)
 	/* 100m boundary buffer size */
 	int bd = 10000;
 	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
-		   (p.y < 100000 + bd) && (p.classification == 2) ;
+		   (p.y < 100000 + bd) &&
+		   (p.classification == 2 || p.classification == 9);
 	return (ret);
 }
 
@@ -817,9 +819,9 @@ static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	    get_filename(cfg.x0, cfg.y0, cfg.out_dir, "points.ply");
 	const char *format =
 	    "poissonrecon --in %s --out %s --scale 1.0 --depth %d "
-	    "--pointWeight %d --confidence %d --threads 8 %s";
+	    "--pointWeight %.1f --confidence %d --threads 8 %s";
 	unsigned short len =
-	    strlen(recon_in) + strlen(recon_out) + strlen(format) + 16;
+	    strlen(recon_in) + strlen(recon_out) + strlen(format) + 32;
 
 	char *cmd = (char *)calloc(len, sizeof(*cmd));
 	snprintf(cmd, len, format, recon_in, recon_out, cfg.depth, cfg.weight,
@@ -924,10 +926,58 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 #else
 static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 {
-	return mesh_remesh(mesh, data, cfg.hausd * 0.001, 5, false, 1);
+
+	MMG5_pMesh mm = NULL;
+	MMG5_pSol ss = NULL;
+	MMGS_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet,
+		       &ss, MMG5_ARG_end);
+
+	MMGS_Init_parameters(mm);
+
+	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hausd, cfg.hausd * 0.001);
+	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hgrad, cfg.hgrad);
+	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, 0);
+	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, cfg.verbose ? 1 : -1);
+
+	mmg_load_mesh(mesh, data, mm, ss);
+
+	const Vec3 *pos = data.positions + mesh.vertex_offset;
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		bool req = false;
+		float eps = 0.005;
+
+		req |= (pos[i].x == 0 && pos[i].y <= eps);
+		req |= (pos[i].x == 0 && pos[i].y >= 1 - eps);
+
+		req |= (pos[i].x == 1 && pos[i].y <= eps);
+		req |= (pos[i].x == 1 && pos[i].y >= 1 - eps);
+
+		req |= (pos[i].y == 0 && pos[i].x <= eps);
+		req |= (pos[i].y == 0 && pos[i].x >= 1 - eps);
+
+		req |= (pos[i].y == 1 && pos[i].x <= eps);
+		req |= (pos[i].y == 1 && pos[i].x >= 1 - eps);
+
+		if (req)
+			MMGS_Set_requiredVertex(mm, i + 1);
+	}
+
+	MMGS_mmgslib(mm, ss);
+	int np, nt, na;
+	MMGS_Get_meshSize(mm, &np, &nt, &na);
+
+	/* Should be no-op */
+	data.reserve_vertices(mesh.vertex_count + mesh.vertex_offset);
+	data.reserve_indices(mesh.index_count + mesh.index_offset);
+
+	mmg_unload_mesh(mesh, data, mm, ss);
+
+	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
+		      MMG5_ARG_end);
+
+	return 0;
 }
 #endif
-
 
 int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 {
@@ -979,6 +1029,75 @@ int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 	return (ret);
 }
 
+size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
+{
+	TArray<bool> is_bd(mesh.vertex_count, false);
+	TArray<uint32_t> counts(mesh.vertex_count, 0);
+	TArray<uint32_t> offsets(mesh.vertex_count);
+	TArray<uint32_t> edges(mesh.index_count);
+
+	/* Fill counts */
+	const uint32_t *idx = data.indices + mesh.index_offset;
+	for (size_t i = 0; i < mesh.index_count; ++i) {
+		counts[idx[i]] += 1;
+	}
+	/* Fill offsets */
+	uint32_t offset = 0;
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		offsets[i] = offset;
+		offset += counts[i];
+	}
+	/* Fill edges */
+	for (size_t i = 0; i < mesh.index_count / 3; ++i) {
+		uint32_t i0 = idx[3 * i + 0];
+		uint32_t i1 = idx[3 * i + 1];
+		uint32_t i2 = idx[3 * i + 2];
+		edges[offsets[i0]++] = i1;
+		edges[offsets[i1]++] = i2;
+		edges[offsets[i2]++] = i0;
+	}
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		offsets[i] -= counts[i];
+	}
+	for (size_t i0 = 0; i0 < mesh.vertex_count; ++i0) {
+		if (is_bd[i0])
+			continue;
+		for (size_t j = 0; j < counts[i0]; ++j) {
+			uint32_t i1 = edges[offsets[i0] + j];
+			bool bd_edge = true;
+			for (size_t k = 0; k < counts[i1]; ++k) {
+				uint32_t i0b = edges[offsets[i1] + k];
+				if (i0 == i0b) {
+					bd_edge = false;
+					break;
+				}
+			}
+			if (bd_edge) {
+				is_bd[i0] = is_bd[i1] = true;
+			}
+		}
+	}
+	size_t bd_count = 0;
+	float max_bd_dist = 0;
+	Vec3 *pos = data.positions + mesh.vertex_offset;
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		if (is_bd[i]) {
+			bd_count += 1;
+			float errx = std::abs(pos[i].x - roundf(pos[i].x));
+			float erry = std::abs(pos[i].y - roundf(pos[i].y));
+			if (errx <= erry) {
+				pos[i].x = roundf(pos[i].x);
+				max_bd_dist = std::max(max_bd_dist, errx);
+			} else {
+				pos[i].y = roundf(pos[i].y);
+				max_bd_dist = std::max(max_bd_dist, erry);
+			}
+		}
+	}
+	printf("Max_bd_dist : %f\n", max_bd_dist);
+	return bd_count;
+}
+
 /******************************************************************************
  *
  * IV. Main.
@@ -1028,6 +1147,10 @@ int main(int argc, char **argv)
 			return (-1);
 		}
 	}
+
+	size_t bd_num = fix_boundary_vertices(mesh, data);
+	printf("Number of boundary vertices : %zu\n", bd_num);
+
 	if (cfg.optimize)
 		optimize_mesh(mesh, data);
 

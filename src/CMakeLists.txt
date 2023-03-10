@@ -32,7 +32,7 @@ add_executable(swiss_lidar
 
 target_compile_features(swiss_lidar PRIVATE cxx_std_17)
 target_compile_options(swiss_lidar PRIVATE -Wall)
-target_link_libraries(swiss_lidar miniply meshoptimizer gdal /home/smets/Code/Extern/mmg/build/lib/libmmgs.a)
+target_link_libraries(swiss_lidar miniply meshoptimizer gdal ${swiss_lidar_SOURCE_DIR}/extern/mmg/libmmgs.a)
 
 add_executable(compute_normals
 	las_read.cpp

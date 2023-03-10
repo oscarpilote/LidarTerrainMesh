@@ -173,7 +173,7 @@ int write_inria(const char *fname, const Mesh &mesh, const MBuf &data)
 	return 0;
 }
 
-static int mmg_load_mesh(const Mesh& m, const MBuf& data, MMG5_pMesh mm, MMG5_pSol ss)
+int mmg_load_mesh(const Mesh &m, const MBuf &data, MMG5_pMesh mm, MMG5_pSol ss)
 {
 	MMGS_Set_meshSize(mm, m.vertex_count, m.index_count / 3, 0);
 	const Vec3 *pos = data.positions + m.vertex_offset;
@@ -191,22 +191,24 @@ static int mmg_load_mesh(const Mesh& m, const MBuf& data, MMG5_pMesh mm, MMG5_pS
 		MMGS_Set_triangle(mm, i0 + 1, i1 + 1, i2 + 1, 0, i + 1);
 	}
 
-	if (MMGS_Chk_meshData(mm,ss) != 1)
+	if (MMGS_Chk_meshData(mm, ss) != 1)
 		return (-1);
-	
+
 	return 0;
 }
 
-static int mmg_unload_mesh(Mesh& m, MBuf& data, const MMG5_pMesh mm, const MMG5_pSol ss)
+int mmg_unload_mesh(Mesh &m, MBuf &data, const MMG5_pMesh mm,
+		    const MMG5_pSol ss)
 {
 	int np, nt, na;
 	MMGS_Get_meshSize(mm, &np, &nt, &na);
-	
+
 	Vec3 *pos = data.positions + m.vertex_offset;
 	for (int i = 0; i < np; ++i) {
 		double c0, c1, c2;
 		int dummy;
-		MMGS_GetByIdx_vertex(mm, &c0, &c1, &c2, &dummy, &dummy, &dummy, i + 1);
+		MMGS_GetByIdx_vertex(mm, &c0, &c1, &c2, &dummy, &dummy, &dummy,
+				     i + 1);
 		pos[i].x = c0;
 		pos[i].y = c1;
 		pos[i].z = c2;
@@ -227,34 +229,36 @@ static int mmg_unload_mesh(Mesh& m, MBuf& data, const MMG5_pMesh mm, const MMG5_
 	return 0;
 }
 
-int mmg_remesh(Mesh &m, MBuf &data, float hausd, float hgrad, bool ridges, int verbose)
+int mmg_remesh(Mesh &m, MBuf &data, float hausd, float hgrad, bool ridges,
+	       int verbose)
 {
 	MMG5_pMesh mm = NULL;
 	MMG5_pSol ss = NULL;
 	MMGS_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet,
-			&ss, MMG5_ARG_end);
-	
+		       &ss, MMG5_ARG_end);
+
 	MMGS_Init_parameters(mm);
 
 	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hausd, hausd);
 	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hgrad, hgrad);
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, ridges);
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, verbose);
-	
+
 	mmg_load_mesh(m, data, mm, ss);
 
 	MMGS_mmgslib(mm, ss);
 	int np, nt, na;
 	MMGS_Get_meshSize(mm, &np, &nt, &na);
 
-	bool reduced = (np <= (int)m.vertex_count && nt <= (int)m.index_count / 3);
+	bool reduced =
+	    (np <= (int)m.vertex_count && nt <= (int)m.index_count / 3);
 
 	if (reduced) {
 		mmg_unload_mesh(m, data, mm, ss);
 	}
-	
-	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet,
-			&ss, MMG5_ARG_end);
+
+	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
+		      MMG5_ARG_end);
 
 	return reduced ? 0 : -1;
 }
