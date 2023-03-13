@@ -95,17 +95,20 @@ size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
 			continue;
 		const float *query = &pos[i].x;
 		tree.knnSearch(query, probes, &knn_idx[0], &sqr_dist[0]);
-		float majority = 0;
+		int majority = 0;
+		int votes = 0;
 		for (size_t j = 0; j < probes; ++j) {
 			unsigned k = knn_idx[j];
 			if (oriented[k] >= EPlague) {
 				float test = dot(nml[k], nml[i]);
-				if (fabs(test) > (1 + tol - qual[i])) {
-					majority += qual[k] * test;
+				if (fabs(test) >
+				    (tol + 2 * (1 - qual[i] * qual[k]))) {
+					majority += test > 0 ? 1 : -1;
+					votes++;
 				}
 			}
 		}
-		if (majority != 0) {
+		if (majority != 0 && abs(majority) == votes) {
 			oriented[i] = ETmpPlague;
 			newly_settled++;
 			if (majority < 0)

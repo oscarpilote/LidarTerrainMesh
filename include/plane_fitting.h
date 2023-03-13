@@ -80,21 +80,19 @@ template <class T>
 void ComputeCovarianceMatrix(const TVec3<T> *points, size_t point_num,
 			     TVec3<T> &barycenter, Eigen::Matrix<T, 3, 3> &m)
 {
-	// first cycle: compute the barycenter
 	barycenter = TVec3<T>::Zero;
 	for (size_t i = 0; i < point_num; ++i) {
 		barycenter += points[i];
 	}
 	barycenter /= point_num;
 
-	// second cycle: compute the covariance matrix
 	m.setZero();
 	Eigen::Matrix<T, 3, 1> p;
 	for (size_t i = 0; i < point_num; ++i) {
 		p(0) = points[i].x - barycenter.x;
 		p(1) = points[i].y - barycenter.y;
 		p(2) = points[i].z - barycenter.z;
-		m += p * p.transpose(); // outer product
+		m += p * p.transpose();
 	}
 	m /= point_num;
 }
@@ -105,7 +103,10 @@ static inline T quality(T eig_min, T eig_mid, T eig_max, T perp_dist2)
 	/* Note : both qual1 and qual2 fall into [0,1] */
 
 	/* qual1 : flatness of the ellipsoid */
-	T qual1 = (eig_mid == 0) ? 0 : 1 - eig_min / eig_mid;
+	T qual1 =
+	    (eig_mid == 0)
+		? 0
+		: std::max<T>(1 - eig_min * eig_max / (eig_mid * eig_mid), 0);
 
 	/* qual2 : target point not an outlier wrt the ellipsoid */
 	T qual2 =
@@ -113,8 +114,8 @@ static inline T quality(T eig_min, T eig_mid, T eig_max, T perp_dist2)
 
 	/* TODO Profile */
 	/* qual : heuristic based on qual1 and qual2 */
-	// return qual1 * qual2;
-	return std::max<T>(2 * qual1 * qual2 - 1, 0);
+	return qual1 * qual2;
+	// return std::max<T>(2 * qual1 * qual2 - 1, 0);
 }
 
 template <class T>

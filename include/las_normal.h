@@ -8,7 +8,7 @@
 #define NUM_PROBES 10
 #define SCAN_TOL 0.25
 #define FLIP_TOL 0.35
-#define NML_Z_THRESH 0.3
+#define NML_Z_THRESH 0.55
 
 enum EOrient {
 	ENone = 0,

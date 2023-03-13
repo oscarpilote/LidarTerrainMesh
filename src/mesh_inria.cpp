@@ -173,18 +173,19 @@ int write_inria(const char *fname, const Mesh &mesh, const MBuf &data)
 	return 0;
 }
 
-int mmg_load_mesh(const Mesh &m, const MBuf &data, MMG5_pMesh mm, MMG5_pSol ss)
+int load_mesh_to_mmg(const Mesh &mesh, const MBuf &data, MMG5_pMesh mm,
+		     MMG5_pSol ss)
 {
-	MMGS_Set_meshSize(mm, m.vertex_count, m.index_count / 3, 0);
-	const Vec3 *pos = data.positions + m.vertex_offset;
-	for (size_t i = 0; i < m.vertex_count; ++i) {
+	MMGS_Set_meshSize(mm, mesh.vertex_count, mesh.index_count / 3, 0);
+	const Vec3 *pos = data.positions + mesh.vertex_offset;
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
 		double c0 = pos[i].x;
 		double c1 = pos[i].y;
 		double c2 = pos[i].z;
 		MMGS_Set_vertex(mm, c0, c1, c2, 0, i + 1);
 	}
-	const uint32_t *idx = data.indices + m.index_offset;
-	for (size_t i = 0; i < m.index_count / 3; ++i) {
+	const uint32_t *idx = data.indices + mesh.index_offset;
+	for (size_t i = 0; i < mesh.index_count / 3; ++i) {
 		uint32_t i0 = idx[3 * i + 0];
 		uint32_t i1 = idx[3 * i + 1];
 		uint32_t i2 = idx[3 * i + 2];
@@ -197,13 +198,14 @@ int mmg_load_mesh(const Mesh &m, const MBuf &data, MMG5_pMesh mm, MMG5_pSol ss)
 	return 0;
 }
 
-int mmg_unload_mesh(Mesh &m, MBuf &data, const MMG5_pMesh mm,
-		    const MMG5_pSol ss)
+int unload_mesh_from_mmg(Mesh &mesh, MBuf &data, const MMG5_pMesh mm,
+			 const MMG5_pSol ss)
 {
 	int np, nt, na;
 	MMGS_Get_meshSize(mm, &np, &nt, &na);
 
-	Vec3 *pos = data.positions + m.vertex_offset;
+	data.reserve_vertices(mesh.vertex_offset + np);
+	Vec3 *pos = data.positions + mesh.vertex_offset;
 	for (int i = 0; i < np; ++i) {
 		double c0, c1, c2;
 		int dummy;
@@ -213,9 +215,10 @@ int mmg_unload_mesh(Mesh &m, MBuf &data, const MMG5_pMesh mm,
 		pos[i].y = c1;
 		pos[i].z = c2;
 	}
-	m.vertex_count = np;
+	mesh.vertex_count = np;
 
-	uint32_t *idx = data.indices + m.index_offset;
+	data.reserve_indices(mesh.index_offset + 3 * nt);
+	uint32_t *idx = data.indices + mesh.index_offset;
 	for (int i = 0; i < nt; ++i) {
 		int i0, i1, i2;
 		int dummy;
@@ -224,12 +227,12 @@ int mmg_unload_mesh(Mesh &m, MBuf &data, const MMG5_pMesh mm,
 		idx[3 * i + 1] = i1 - 1;
 		idx[3 * i + 2] = i2 - 1;
 	}
-	m.index_count = 3 * nt;
+	mesh.index_count = 3 * nt;
 
 	return 0;
 }
 
-int mmg_remesh(Mesh &m, MBuf &data, float hausd, float hgrad, bool ridges,
+int mmg_remesh(Mesh &mesh, MBuf &data, float hausd, float hgrad, bool ridges,
 	       int verbose)
 {
 	MMG5_pMesh mm = NULL;
@@ -244,21 +247,16 @@ int mmg_remesh(Mesh &m, MBuf &data, float hausd, float hgrad, bool ridges,
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, ridges);
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, verbose);
 
-	mmg_load_mesh(m, data, mm, ss);
+	load_mesh_to_mmg(mesh, data, mm, ss);
 
 	MMGS_mmgslib(mm, ss);
 	int np, nt, na;
 	MMGS_Get_meshSize(mm, &np, &nt, &na);
 
-	bool reduced =
-	    (np <= (int)m.vertex_count && nt <= (int)m.index_count / 3);
-
-	if (reduced) {
-		mmg_unload_mesh(m, data, mm, ss);
-	}
+	unload_mesh_from_mmg(mesh, data, mm, ss);
 
 	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
 		      MMG5_ARG_end);
 
-	return reduced ? 0 : -1;
+	return (0);
 }

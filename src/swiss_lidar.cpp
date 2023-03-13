@@ -26,6 +26,10 @@
 
 #include "swiss_raster.h"
 
+/* Size of tile boundary buffer in cm */
+#define BDY_BUFFER 10000
+
+/* Save normal quality as PLY point color attribute */
 #define DEBUG_NML_CONFIDENCE 1
 
 /******************************************************************************
@@ -299,18 +303,41 @@ static inline void rebase_las_point(struct LasPoint &p, int dx, int dy)
 static inline bool filter_las_point(const struct LasPoint &p)
 {
 	/* 100m boundary buffer size */
-	int bd = 10000;
+	int bd = BDY_BUFFER;
 	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
-		   (p.y < 100000 + bd) &&
-		   (p.classification == 2 || p.classification == 9);
+		   (p.y < 100000 + bd) && (p.classification == 2);
 	return (ret);
 }
 
+#if 1 /* Only fill holes left in the las dataset */
+static bool filter_raster_point(const struct LasPoint &p,
+				const TArray<uint32_t> &density, int N)
+{
+	/* 100m boundary buffer size */
+	int bd = BDY_BUFFER;
+	if ((p.x < -bd) || (p.x > 100000 + bd) || (p.y < -bd) ||
+	    (p.y > 100000 + bd)) {
+		return false;
+	}
+	/* Density check */
+	const float width = 100000 + 2 * BDY_BUFFER;
+	const float invh = N / width;
+	int pix_x = ((float)p.x + BDY_BUFFER) * invh - 0.5f;
+	pix_x = pix_x < 0 ? 0 : pix_x;
+	pix_x = pix_x >= N ? N - 1 : pix_x;
+	int pix_y = ((float)p.y + BDY_BUFFER) * invh - 0.5f;
+	pix_y = pix_y < 0 ? 0 : pix_y;
+	pix_y = pix_y >= N ? N - 1 : pix_y;
+	int pix = pix_y * N + pix_x;
+	return (density[pix] == 0);
+}
+
+#else
 static bool filter_raster_point(const struct LasPoint &p, const float *alt,
 				int px, int py, int nx, int ny)
 {
 	/* 100m boundary buffer size */
-	int bd = 10000;
+	int bd = BDY_BUFFER;
 	if ((p.x < -bd) || (p.x > 100000 + bd) || (p.y < -bd) ||
 	    (p.y > 100000 + bd)) {
 		return false;
@@ -347,6 +374,7 @@ static bool filter_raster_point(const struct LasPoint &p, const float *alt,
 
 	return slope < 1;
 }
+#endif
 
 static int get_las_counts(TArray<int> &source_ids, TArray<int> &source_counts,
 			  int x0, int y0, const char *base_dir)
@@ -478,7 +506,8 @@ static size_t read_and_filter_las_data(TArray<struct LasPoint> &points,
 	return points.size;
 }
 
-static size_t get_raster_point_count(int x0, int y0, const char *base_dir)
+static size_t get_raster_point_count(int x0, int y0, const char *base_dir,
+				     const TArray<uint32_t> &density, int N)
 {
 	size_t raster_point_count = 0;
 	for (int i = 0; i < 9; ++i) {
@@ -503,10 +532,17 @@ static size_t get_raster_point_count(int x0, int y0, const char *base_dir)
 				struct LasPoint p;
 				p.x = (2 * px + 1) * 50 * 1000 / nx;
 				p.y = (2 * (ny - py) - 1) * 50 * 1000 / ny;
+				/* No data check */
+				if (altitudes[nx * py + px] < -500)
+					continue;
 				p.z = (int)(100 * altitudes[nx * py + px]);
 				rebase_las_point(p, dx, dy);
+#if 1
+				if (filter_raster_point(p, density, N))
+#else
 				if (filter_raster_point(p, altitudes.data, px,
 							py, nx, ny))
+#endif
 					++raster_point_count;
 			}
 		}
@@ -516,7 +552,8 @@ static size_t get_raster_point_count(int x0, int y0, const char *base_dir)
 
 static size_t fill_raster_points(TArray<struct LasPoint> &points, size_t offset,
 				 int dummy_source_idx, int x0, int y0,
-				 const char *base_dir)
+				 const char *base_dir,
+				 const TArray<uint32_t> &density, int N)
 {
 	size_t point_idx = offset;
 	for (int i = 0; i < 9; ++i) {
@@ -541,11 +578,18 @@ static size_t fill_raster_points(TArray<struct LasPoint> &points, size_t offset,
 				struct LasPoint p;
 				p.x = (2 * px + 1) * 50 * 1000 / nx;
 				p.y = (2 * (ny - py) - 1) * 50 * 1000 / ny;
+				/* No data check */
+				if (altitudes[nx * py + px] < -500)
+					continue;
 				p.z = (int)(100 * altitudes[nx * py + px]);
 				p.source_idx = dummy_source_idx;
 				rebase_las_point(p, dx, dy);
+#if 1
+				if (filter_raster_point(p, density, N))
+#else
 				if (filter_raster_point(p, altitudes.data, px,
 							py, nx, ny))
+#endif
 					points[point_idx++] = p;
 			}
 		}
@@ -553,12 +597,47 @@ static size_t fill_raster_points(TArray<struct LasPoint> &points, size_t offset,
 	return (point_idx - offset);
 }
 
+static void build_point_density_matrix(const TArray<struct LasPoint> &points,
+				       TArray<uint32_t> &density, int N)
+{
+	density.clear();
+	density.resize(N * N);
+	memset(&density[0], 0, N * N * sizeof(uint32_t));
+	float width = 100000 + 2 * BDY_BUFFER;
+	float invh = N / width;
+	for (size_t i = 0; i < points.size; ++i) {
+		int pix_x = ((float)points[i].x + BDY_BUFFER) * invh - 0.5f;
+		pix_x = pix_x < 0 ? 0 : pix_x;
+		pix_x = pix_x >= N ? N - 1 : pix_x;
+		int pix_y = ((float)points[i].y + BDY_BUFFER) * invh - 0.5f;
+		pix_y = pix_y < 0 ? 0 : pix_y;
+		pix_y = pix_y >= N ? N - 1 : pix_y;
+		int pix = pix_y * N + pix_x;
+		density[pix] += 1;
+	}
+}
+
 static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 					  TArray<struct SourceFlightLine> &fls,
 					  const struct Cfg &cfg)
 {
+	const uint32_t N = 600;
+	TArray<uint32_t> density;
+	build_point_density_matrix(points, density, N);
+
+	uint32_t empty_pix = 0;
+	for (size_t pix = 0; pix < N * N; pix++) {
+		if (!density[pix])
+			empty_pix++;
+	}
+
+	printf("Number of empty_pix : %d\n", empty_pix);
+
+	if (!empty_pix)
+		return 0;
+
 	size_t raster_point_count =
-	    get_raster_point_count(cfg.x0, cfg.y0, cfg.base_dir);
+	    get_raster_point_count(cfg.x0, cfg.y0, cfg.base_dir, density, N);
 
 	if (!raster_point_count)
 		return 0;
@@ -568,7 +647,7 @@ static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 	points.resize(points.size + raster_point_count);
 	size_t dummy_source_idx = fls.size;
 	fill_raster_points(points, offset, dummy_source_idx, cfg.x0, cfg.y0,
-			   cfg.base_dir);
+			   cfg.base_dir, density, N);
 	fls.resize(fls.size + 1);
 	fls[fls.size - 1].is_valid = false;
 
@@ -586,9 +665,9 @@ static int send_points_to_unit_cube(const TArray<struct LasPoint> &points,
 	float span = (max_z - min_z) * 0.01f;
 	printf("(Altitude span : %.0f meters)\n", span);
 	float n;
-	if (span < 1083.33f) {
+	if (span < 1250.f) {
 		n = 6;
-	} else if (span < 1625.f) {
+	} else if (span < 1875.f) {
 		n = 2;
 	} else {
 		return (-1);
@@ -598,8 +677,8 @@ static int send_points_to_unit_cube(const TArray<struct LasPoint> &points,
 	float mean = 0.5 * (min_z + max_z) * 1e-5 * t.scale;
 	/* Round shift.z so that octree boxes match vertically to neighboors */
 	t.shift.z = 0.5 - round(16 * mean) * 0.0625;
-	assert(min_z * 1e-5 * t.scale + t.shift.z >= 0.0625);
-	assert(max_z * 1e-5 * t.scale + t.shift.z <= 1 - 0.0625);
+	assert(min_z * 1e-5 * t.scale + t.shift.z >= 0);
+	assert(max_z * 1e-5 * t.scale + t.shift.z <= 1);
 	for (size_t i = 0; i < points.size; ++i) {
 		pos[i].x = points[i].x * 1e-5 * t.scale + t.shift.x;
 		pos[i].y = points[i].y * 1e-5 * t.scale + t.shift.y;
@@ -631,20 +710,23 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 			printf("Using cached data in %s\n", recon_in);
 			fclose(f);
 			free(recon_in);
-			return 0;
+			return (0);
 		}
 	}
 
 	/* Read data */
 	TArray<struct LasPoint> points;
 	TArray<struct SourceFlightLine> fls;
-	// HACK
-	// size_t las_num = 0;
 	size_t las_num = read_and_filter_las_data(points, fls, cfg);
 	size_t ras_num = read_and_filter_raster_data(points, fls, cfg);
 
 	printf("Total Lidar points used    : %zu\n", las_num);
 	printf("Total Raster points used   : %zu\n", ras_num);
+
+	if (!las_num && !ras_num) {
+		printf("No data available for this tile.\n");
+		return (-1);
+	}
 
 	printf("Set positions & transform  : ");
 	/* Rescale and offset positions into buffer */
@@ -939,7 +1021,7 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, 0);
 	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, cfg.verbose ? 1 : -1);
 
-	mmg_load_mesh(mesh, data, mm, ss);
+	load_mesh_to_mmg(mesh, data, mm, ss);
 
 	const Vec3 *pos = data.positions + mesh.vertex_offset;
 	for (size_t i = 0; i < mesh.vertex_count; ++i) {
@@ -966,11 +1048,11 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	int np, nt, na;
 	MMGS_Get_meshSize(mm, &np, &nt, &na);
 
-	/* Should be no-op */
-	data.reserve_vertices(mesh.vertex_count + mesh.vertex_offset);
-	data.reserve_indices(mesh.index_count + mesh.index_offset);
+	// Moved to unload_mesh_from_mmg
+	// data.reserve_vertices(mesh.vertex_offset + np);
+	// data.reserve_indices(mesh.index_offset + 3 * nt);
 
-	mmg_unload_mesh(mesh, data, mm, ss);
+	unload_mesh_from_mmg(mesh, data, mm, ss);
 
 	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
 		      MMG5_ARG_end);
@@ -1122,7 +1204,7 @@ int main(int argc, char **argv)
 	printf("I. Building oriented point set :\n");
 	printf("--------------------------------\n");
 	if (build_oriented_point_set(cfg)) {
-		printf("No data found.\n");
+		printf("Error in building oriented point set.\n");
 		return (-1);
 	}
 
