@@ -102,7 +102,8 @@ size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
 			if (oriented[k] >= EPlague) {
 				float test = dot(nml[k], nml[i]);
 				if (fabs(test) >
-				    (tol + 2 * (1 - qual[i] * qual[k]))) {
+				    (tol +
+				     (1 - tol) * (1 - qual[i] * qual[k]))) {
 					majority += test > 0 ? 1 : -1;
 					votes++;
 				}

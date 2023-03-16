@@ -17,6 +17,7 @@ add_library(meshoptimizer
 	)
 
 add_executable(swiss_lidar
+	chrono.cpp
 	las_read.cpp
 	las_source.cpp
 	las_normal.cpp

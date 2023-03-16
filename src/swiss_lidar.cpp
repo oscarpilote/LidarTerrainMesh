@@ -9,6 +9,7 @@
 #include "mmg/mmgs/libmmgs.h"
 
 #include "array.h"
+#include "chrono.h"
 #include "hash_table.h"
 #include "math_utils.h"
 #include "sys_utils.h"
@@ -772,15 +773,17 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 
 	float progress = 1.f;
 	int pass = 1;
-	while (unset && progress > 0.0001f) {
+	while (unset && progress > 0.0001f && pass < 20) {
 		size_t newly_set =
 		    propagate_nml_once(data.positions, points.size, kdtree,
 				       qual.data, data.normals, oriented.data);
 		progress = (float)newly_set / unset;
 		unset -= newly_set;
-		printf("    Oriented after propagate pass nbr %d : %.1f %%\n",
+		printf("\r    Oriented after propagate pass nbr %d : %.1f %%",
 		       pass++, (points.size - unset) * 100.f / points.size);
+		fflush(stdout);
 	}
+	printf("\n");
 
 	if (cfg.nml_confidence) {
 		/*weight normals according to orientation found and quality */
@@ -1270,15 +1273,22 @@ int main(int argc, char **argv)
 		}
 	}
 
+	timer_start();
 	uint32_t num_cc = select_principal_connected_component(mesh, data);
 	if (num_cc != 1)
 		printf("Removed %d connected components.\n", num_cc - 1);
+	timer_stop("Connected components");
 
+	timer_start();
 	size_t bd_num = fix_boundary_vertices(mesh, data);
 	printf("Number of boundary vertices : %zu\n", bd_num);
+	timer_stop("Fix boundary");
 
-	if (cfg.optimize)
+	if (cfg.optimize) {
+		timer_start();
 		optimize_mesh(mesh, data);
+		timer_stop("Optimize");
+	}
 
 	/* Save final mesh */
 	if (cfg.encode && quantize_encode_mesh(mesh, data, cfg)) {

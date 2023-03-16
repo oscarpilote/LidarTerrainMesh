@@ -5,9 +5,10 @@
 
 #include "las_source.h"
 
-#define NUM_PROBES 10
+#define ORIENT_PROBES 10
 #define SCAN_TOL 0.25
-#define FLIP_TOL 0.35
+#define FLIP_PROBES 6
+#define FLIP_TOL 0.85
 #define NML_Z_THRESH 0.55
 
 enum EOrient {
@@ -21,7 +22,7 @@ enum EOrient {
 void estim_unoriented_nml(const Vec3 *pos, size_t point_num, Vec3 *nml,
 			  float *qual, const KdTree<3> &tree,
 			  void (*cb)(float progress) = NULL,
-			  int probes = NUM_PROBES);
+			  int probes = ORIENT_PROBES);
 
 size_t orient_nml_with_z(Vec3 *nml, EOrient *oriented, size_t point_num,
 			 const float *qual, float tol = NML_Z_THRESH);
@@ -33,5 +34,5 @@ size_t orient_nml_with_scan(const LasPoint *points, size_t point_num,
 
 size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
 			  const KdTree<3> &tree, const float *qual, Vec3 *nml,
-			  EOrient *oriented, size_t probes = NUM_PROBES,
+			  EOrient *oriented, size_t probes = FLIP_PROBES,
 			  float tol = FLIP_TOL);
