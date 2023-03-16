@@ -14,6 +14,7 @@
 #include "sys_utils.h"
 
 #include "mesh.h"
+#include "mesh_adjacency.h"
 #include "mesh_inria.h"
 #include "mesh_ply.h"
 #include "mesh_remesh.h"
@@ -92,8 +93,8 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.ani = (argc >= 11) ? atoi(argv[10]) : 0;
 	cfg.clean = (argc >= 12) ? atoi(argv[11]) : 0;
 	cfg.verbose = (argc >= 13) ? atoi(argv[12]) : 1;
-	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 1;
-	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 1;
+	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 0;
+	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 0;
 	cfg.nml_confidence = (argc >= 16) ? atoi(argv[15]) : 1;
 	cfg.x0_base = (argc >= 17) ? atoi(argv[16]) : cfg.x0;
 	cfg.y0_base = (argc >= 18) ? atoi(argv[17]) : cfg.y0;
@@ -1111,6 +1112,45 @@ int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
 	return (ret);
 }
 
+uint32_t select_principal_connected_component(Mesh &mesh, MBuf &data)
+{
+	struct EAdj eadj;
+	fill_edge_adjacency(mesh, data, eadj);
+
+	TArray<uint32_t> triadj;
+	fill_tri_adjacency(mesh, data, eadj, triadj);
+
+	TArray<uint32_t> cc;
+	uint32_t num_cc = find_connected_components(triadj, cc);
+
+	if (num_cc == 1)
+		return (num_cc);
+
+	size_t tri_count = mesh.index_count / 3;
+	assert(cc.size == tri_count);
+
+	TArray<uint32_t> counts(num_cc, 0);
+	for (size_t i = 0; i < tri_count; ++i) {
+		counts[cc[i]]++;
+	}
+	uint32_t cc_max = 0;
+	for (size_t i = 1; i < num_cc; ++i) {
+		cc_max = counts[i] > counts[cc_max] ? i : cc_max;
+	}
+	size_t new_index_count = 0;
+	uint32_t *indices = data.indices + mesh.index_offset;
+	for (size_t i = 0; i < tri_count; ++i) {
+		if (cc[i] == cc_max) {
+			indices[new_index_count++] = indices[3 * i + 0];
+			indices[new_index_count++] = indices[3 * i + 1];
+			indices[new_index_count++] = indices[3 * i + 2];
+		}
+	}
+	mesh.index_count = new_index_count;
+
+	return (num_cc);
+}
+
 size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 {
 	TArray<bool> is_bd(mesh.vertex_count, false);
@@ -1229,6 +1269,10 @@ int main(int argc, char **argv)
 			return (-1);
 		}
 	}
+
+	uint32_t num_cc = select_principal_connected_component(mesh, data);
+	if (num_cc != 1)
+		printf("Removed %d connected components.\n", num_cc - 1);
 
 	size_t bd_num = fix_boundary_vertices(mesh, data);
 	printf("Number of boundary vertices : %zu\n", bd_num);

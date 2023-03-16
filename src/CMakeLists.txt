@@ -21,6 +21,7 @@ add_executable(swiss_lidar
 	las_source.cpp
 	las_normal.cpp
 	mesh.cpp
+	mesh_adjacency.cpp
 	mesh_ply.cpp
 	mesh_inria.cpp
 	mesh_remesh.cpp

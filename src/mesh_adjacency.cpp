@@ -1,16 +1,7 @@
 #include "array.h"
 #include "mesh.h"
 
-struct Edge {
-	uint32_t dest;
-	uint32_t idx;
-};
-
-struct EAdj {
-	uint32_t vertex_count;
-	uint32_t index_count;
-	TArray<Edge> edges;
-};
+#include "mesh_adjacency.h"
 
 void fill_edge_adjacency(const Mesh &mesh, const MBuf &data, EAdj &adj)
 {
@@ -18,7 +9,7 @@ void fill_edge_adjacency(const Mesh &mesh, const MBuf &data, EAdj &adj)
 	adj.index_count = mesh.index_count;
 	adj.edges.resize(mesh.vertex_count + mesh.index_count);
 	for (size_t i = 0; i < mesh.vertex_count + mesh.index_count; ++i) {
-		adj.edges[i].dest = adj.edges[i].idx = ~0;
+		adj.edges[i].dest = adj.edges[i].idx = ~0u;
 	}
 
 	const uint32_t *indices = data.indices + mesh.index_offset;
@@ -67,7 +58,7 @@ uint32_t find_edge(const EAdj &adj, uint32_t i0, uint32_t i1)
 	uint32_t dest = edges[i0].dest;
 	uint32_t idx = edges[i0].idx;
 
-	while (dest != ~0) {
+	while (dest != ~0u) {
 		if (dest == i1) {
 			return idx;
 		}
@@ -75,12 +66,12 @@ uint32_t find_edge(const EAdj &adj, uint32_t i0, uint32_t i1)
 		idx = edges[off + idx].idx;
 	}
 
-	return (~0);
+	return (~0u);
 }
 
 bool has_edge(const EAdj &adj, uint32_t i0, uint32_t i1)
 {
-	return (find_edge(adj, i0, i1) != ~0);
+	return (find_edge(adj, i0, i1) != ~0u);
 }
 
 uint32_t next_edge(const EAdj &adj, uint32_t edge_idx, uint32_t i1)
@@ -93,7 +84,7 @@ uint32_t next_edge(const EAdj &adj, uint32_t edge_idx, uint32_t i1)
 	uint32_t dest = edges[off + edge_idx].dest;
 	uint32_t idx = edges[off + edge_idx].idx;
 
-	while (dest != ~0) {
+	while (dest != ~0u) {
 		if (dest == i1) {
 			return idx;
 		}
@@ -101,22 +92,15 @@ uint32_t next_edge(const EAdj &adj, uint32_t edge_idx, uint32_t i1)
 		idx = edges[off + idx].idx;
 	}
 
-	return (~0);
+	return (~0u);
 }
 
-uint32_t
-
-    uint32_t
-    classify_edges(const Mesh &mesh, const MBuf &data, const EAdj &adj)
-{
-}
-
-void fill_tri_adjacency(const Mesh &mesh, const MBuf &data, const EAdj eadj,
-			TArray<uint32_t> triadj)
+void fill_tri_adjacency(const Mesh &mesh, const MBuf &data, const EAdj &eadj,
+			TArray<uint32_t> &triadj)
 {
 	triadj.resize(mesh.index_count);
 	for (size_t i = 0; i < mesh.index_count; ++i) {
-		triadj[i] = ~0;
+		triadj[i] = ~0u;
 	}
 
 	const uint32_t *indices = data.indices + mesh.index_offset;
@@ -138,23 +122,39 @@ uint32_t find_connected_components(const TArray<uint32_t> &triadj,
 
 	cc.resize(tri_count);
 	for (size_t i = 0; i < tri_count; ++i) {
-		cc[i] = ~0;
+		cc[i] = ~0u;
 	}
 
-	uint32_t classified = 0;
 	/* FIFO queue */
-	TArray<bool> visited(tri_count, false);
 	TArray<uint32_t> to_visit(tri_count);
 
-	uint32_t next_tri = 0;
-	uint32_t next_cc = 0;
-	while (classified != tri_count) {
+	uint32_t cur_tri = 0;
+	uint32_t cur_cc = 0;
+	while (cur_tri != ~0u) {
+		cc[cur_tri] = cur_cc;
 		uint32_t front = 0;
-		uint32_t back = 0;
-		while
-			uint32_t t1 = triadj[3 * next_tri + 0] / 3;
-		uint32_t t2 = triadj[3 * next_tri + 1] / 3;
-		uint32_t t3 = triadj[3 * next_tri + 2] / 3;
-		if (t1 != ~0)
+		to_visit[front] = cur_tri;
+		uint32_t back = 1;
+		while (front < back) {
+			uint32_t t = to_visit[front++];
+			for (int i = 0; i < 3; ++i) {
+				uint32_t idx = triadj[3 * t + i];
+				uint32_t ti = idx / 3;
+				if (idx != ~0u && cc[ti] == ~0u) {
+					cc[ti] = cur_cc;
+					to_visit[back++] = ti;
+				}
+			}
+		}
+		cur_cc++;
+		cur_tri = ~0u;
+		for (size_t i = 0; i < tri_count; ++i) {
+			if (cc[i] == ~0u) {
+				cur_tri = i;
+				break;
+			}
+		}
 	}
 
+	return (cur_cc);
+}
