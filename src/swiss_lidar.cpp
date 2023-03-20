@@ -56,8 +56,6 @@ struct Cfg {
 	bool optimize;
 	bool encode;
 	bool nml_confidence;
-	int x0_base;
-	int y0_base;
 };
 
 static int process_args(int argc, const char **argv, struct Cfg &cfg)
@@ -97,8 +95,6 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 1;
 	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 1;
 	cfg.nml_confidence = (argc >= 16) ? atoi(argv[15]) : 1;
-	cfg.x0_base = (argc >= 17) ? atoi(argv[16]) : cfg.x0;
-	cfg.y0_base = (argc >= 18) ? atoi(argv[17]) : cfg.y0;
 
 	return (0);
 }
@@ -109,7 +105,6 @@ static void print_cfg(struct Cfg &cfg)
 	printf("Configuration :\n");
 	printf("---------------\n");
 	printf("Tile coords : %d %d\n", cfg.x0, cfg.y0);
-	printf("Base coords : %d %d\n", cfg.x0_base, cfg.y0_base);
 	printf("Data  dir   : %s\n", cfg.base_dir);
 	printf("Output dir  : %s\n", cfg.out_dir);
 	printf("Verbosity   : %d\n", cfg.verbose ? 1 : 0);
@@ -474,15 +469,14 @@ static void fill_las_points(TArray<struct LasPoint> &points,
 
 static size_t read_and_filter_las_data(TArray<struct LasPoint> &points,
 				       TArray<struct SourceFlightLine> &fls,
-				       const struct Cfg &cfg,
-				       bool verbose = true)
+				       const struct Cfg &cfg)
 {
 	TArray<int> ids;
 	TArray<int> counts;
 	get_las_counts(ids, counts, cfg.x0, cfg.y0, cfg.base_dir);
 	size_t las_source_num = ids.size;
 	if (!las_source_num) {
-		if (verbose)
+		if (cfg.verbose)
 			printf("No LIDAR data found.\n");
 		return (0);
 	}
@@ -494,14 +488,14 @@ static size_t read_and_filter_las_data(TArray<struct LasPoint> &points,
 			cfg.base_dir);
 	/* Derive fligh lines azimut from data. Used later for normals
 	 */
-	if (verbose)
+	if (cfg.verbose)
 		printf("Reconstructing flightlines :");
 	TArray<struct SourceStat> stats(las_source_num);
 	las_stat_sources(points, stats);
 	fls.resize(las_source_num);
 	double scale[3] = {1., 1., 1.};
 	int valid = las_approx_flight_lines(points, scale, stats, fls);
-	if (verbose)
+	if (cfg.verbose)
 		printf(" found %d valid out of %zu sources\n", valid,
 		       las_source_num);
 
@@ -632,8 +626,6 @@ static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 		if (!density[pix])
 			empty_pix++;
 	}
-
-	printf("Number of empty_pix : %d\n", empty_pix);
 
 	if (!empty_pix)
 		return 0;
@@ -880,12 +872,10 @@ static void rescale_and_offset_mesh(Mesh &mesh, MBuf &data,
 	for (size_t i = 0; i < mesh.vertex_count; ++i) {
 		data.positions[i] = data.positions[i] - transf.shift;
 		data.positions[i] *= invscale;
-		data.positions[i].x += cfg.x0 - cfg.x0_base;
-		data.positions[i].y += cfg.y0 - cfg.y0_base;
 	}
 }
 
-static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+static int build_surface_mesh(const struct Cfg &cfg)
 {
 	/* Re-use existing output ? */
 	char *recon_out =
@@ -893,9 +883,6 @@ static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	FILE *f;
 	if ((f = fopen(recon_out, "rb")) != NULL) {
 		printf("Using cached data in %s\n", recon_out);
-		load_ply(mesh, data, recon_out);
-		printf("A total of %d (%.2f M) Tri.\n", mesh.index_count / 3,
-		       1e-6 * mesh.index_count / 3);
 		free(recon_out);
 		fclose(f);
 		return 0;
@@ -915,31 +902,8 @@ static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	int ret = system(cmd);
 
 	if (cfg.clean) {
-		snprintf(cmd, len, "rm %s", recon_in);
+		snprintf(cmd, len, "rm -f %s", recon_in);
 		system(cmd);
-	}
-
-	if (!ret) {
-		load_ply(mesh, data, recon_out);
-		printf(
-		    "A total of %d (%.2f M) Tri after poisson reconstruct.\n",
-		    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
-		struct Transform transf;
-		read_transform(transf, cfg);
-		recut_mesh(mesh, data, transf);
-		printf(
-		    "A total of %d (%.2f M) Tri after buffered boundary cut.\n",
-		    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
-		rescale_and_offset_mesh(mesh, data, transf, cfg);
-		// clusterize_mesh(mesh, data, 0.001 * 0.1);
-		//  optimize_mesh(mesh, data);
-		compact_mesh(mesh, data);
-		if (cfg.clean) {
-			snprintf(cmd, len, "rm %s", recon_out);
-			system(cmd);
-		} else {
-			write_ply(recon_out, mesh, data);
-		}
 	}
 
 	free(cmd);
@@ -949,6 +913,7 @@ static int build_surface_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	return (ret);
 }
 
+#if 0
 static int simplify_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 {
 	float tol = cfg.simp_error;
@@ -968,152 +933,7 @@ static int simplify_mesh(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 
 	return (0);
 }
-
-#if 0 // Old version
-static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
-{
-	char *fin = get_filename(cfg.x0, cfg.y0, cfg.out_dir, "mesh");
-	char *fout = get_filename(cfg.x0, cfg.y0, cfg.out_dir, "out.mesh");
-	char *fsol = get_filename(cfg.x0, cfg.y0, cfg.out_dir, "out.sol");
-
-	/* TODO Avoid going to disk */
-	write_inria(fin, mesh, data);
-
-	const char *format =
-	    "mmgs -in %s -out %s -hausd %.8f -hgrad %.8f -nr -v %d %s";
-	int len = strlen(fin) + strlen(fout) + strlen(format) + 24;
-
-	char *cmd = (char *)calloc(len, sizeof(*cmd));
-	snprintf(cmd, len, format, fin, fout, cfg.hausd * 0.001, cfg.hgrad,
-		 cfg.verbose ? 1 : 0, cfg.ani ? "-A" : "");
-	int ret = system(cmd);
-
-	snprintf(cmd, len, "rm %s", fin);
-	// system(cmd);
-
-	if (!ret) {
-		read_inria(mesh, data, fout);
-		if (!cfg.clean)
-			write_mesh(mesh, data, cfg, "mmgs.ply");
-	}
-
-	snprintf(cmd, len, "rm -f %s", fout);
-	// system(cmd);
-	snprintf(cmd, len, "rm -f %s", fsol);
-	// system(cmd);
-
-	free(cmd);
-	free(fsol);
-	free(fout);
-	free(fin);
-
-	return (ret);
-}
-#else
-static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
-{
-
-	MMG5_pMesh mm = NULL;
-	MMG5_pSol ss = NULL;
-	MMGS_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet,
-		       &ss, MMG5_ARG_end);
-
-	MMGS_Init_parameters(mm);
-
-	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hausd, cfg.hausd * 0.001);
-	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hgrad, cfg.hgrad);
-	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, 0);
-	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, cfg.verbose ? 1 : -1);
-
-	load_mesh_to_mmg(mesh, data, mm, ss);
-
-	const Vec3 *pos = data.positions + mesh.vertex_offset;
-	for (size_t i = 0; i < mesh.vertex_count; ++i) {
-		bool req = false;
-		float eps = 0.005;
-
-		req |= (pos[i].x == 0 && pos[i].y <= eps);
-		req |= (pos[i].x == 0 && pos[i].y >= 1 - eps);
-
-		req |= (pos[i].x == 1 && pos[i].y <= eps);
-		req |= (pos[i].x == 1 && pos[i].y >= 1 - eps);
-
-		req |= (pos[i].y == 0 && pos[i].x <= eps);
-		req |= (pos[i].y == 0 && pos[i].x >= 1 - eps);
-
-		req |= (pos[i].y == 1 && pos[i].x <= eps);
-		req |= (pos[i].y == 1 && pos[i].x >= 1 - eps);
-
-		if (req)
-			MMGS_Set_requiredVertex(mm, i + 1);
-	}
-
-	MMGS_mmgslib(mm, ss);
-	int np, nt, na;
-	MMGS_Get_meshSize(mm, &np, &nt, &na);
-
-	// Moved to unload_mesh_from_mmg
-	// data.reserve_vertices(mesh.vertex_offset + np);
-	// data.reserve_indices(mesh.index_offset + 3 * nt);
-
-	unload_mesh_from_mmg(mesh, data, mm, ss);
-
-	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
-		      MMG5_ARG_end);
-
-	return 0;
-}
 #endif
-
-int quantize_encode_mesh(Mesh &mesh, MBuf &data, const Cfg &cfg)
-{
-	struct Transform transf;
-	if (read_transform(transf, cfg)) {
-		printf("Could not read transform\n");
-		return (-1);
-	}
-
-	uint32_t index_count = mesh.index_count;
-	uint32_t vertex_count = mesh.vertex_count;
-	TArray<TVec3<uint16_t>> qpos(vertex_count);
-	for (size_t i = 0; i < vertex_count; ++i) {
-		Vec3 cubepos = data.positions[i];
-		cubepos.x -= cfg.x0 - cfg.x0_base;
-		cubepos.y -= cfg.y0 - cfg.y0_base;
-		cubepos *= transf.scale;
-		cubepos += transf.shift;
-		qpos[i].x = cubepos.x * ((1 << 16) - 1);
-		qpos[i].y = cubepos.y * ((1 << 16) - 1);
-		qpos[i].z = cubepos.z * ((1 << 16) - 1);
-	}
-	uint32_t *indices = data.indices + mesh.index_offset;
-	// void *vertices = (float *)(data.positions + mesh.vertex_offset);
-	// size_t vertex_size = sizeof(Vec3);
-	void *vertices = qpos.data;
-	size_t vertex_size = sizeof(TVec3<uint16_t>);
-	TArray<uint8_t> vbuf(
-	    meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
-	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices,
-					       vertex_count, vertex_size));
-	TArray<uint8_t> ibuf(
-	    meshopt_encodeIndexBufferBound(index_count, vertex_count));
-	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices,
-					      index_count));
-
-	printf("Sizes : %.1f%% (vertex) %.1fzu%% (index)\n",
-	       ((float)vbuf.size / (ibuf.size + vbuf.size)),
-	       ((float)ibuf.size / (ibuf.size + vbuf.size)));
-
-	char *fname = get_filename(cfg.x0, cfg.y0, cfg.out_dir, "bin");
-	FILE *f = fopen(fname, "wb");
-	int ret = (f == NULL) || fwrite(vbuf.data, vbuf.size, 1, f) != 1 ||
-			  fwrite(ibuf.data, ibuf.size, 1, f) != 1
-		      ? -1
-		      : 0;
-	fclose(f);
-	free(fname);
-	return (ret);
-}
 
 uint32_t select_principal_connected_component(Mesh &mesh, MBuf &data)
 {
@@ -1153,7 +973,6 @@ uint32_t select_principal_connected_component(Mesh &mesh, MBuf &data)
 
 	return (num_cc);
 }
-
 size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 {
 	TArray<bool> is_bd(mesh.vertex_count, false);
@@ -1223,6 +1042,175 @@ size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 	return bd_count;
 }
 
+static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
+{
+	/* Probably safer and might help MMGS */
+	compact_mesh(mesh, data);
+
+	/* MMGS treatment */
+	MMG5_pMesh mm = NULL;
+	MMG5_pSol ss = NULL;
+	MMGS_Init_mesh(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet,
+		       &ss, MMG5_ARG_end);
+
+	MMGS_Init_parameters(mm);
+
+	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hausd, cfg.hausd * 0.001);
+	MMGS_Set_dparameter(mm, ss, MMGS_DPARAM_hgrad, cfg.hgrad);
+	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_angle, 0);
+	MMGS_Set_iparameter(mm, ss, MMGS_IPARAM_verbose, cfg.verbose ? 1 : -1);
+
+	load_mesh_to_mmg(mesh, data, mm, ss);
+
+	const Vec3 *pos = data.positions + mesh.vertex_offset;
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		bool req = false;
+		float eps = 0.005;
+
+		req |= (pos[i].x == 0 && pos[i].y <= eps);
+		req |= (pos[i].x == 0 && pos[i].y >= 1 - eps);
+
+		req |= (pos[i].x == 1 && pos[i].y <= eps);
+		req |= (pos[i].x == 1 && pos[i].y >= 1 - eps);
+
+		req |= (pos[i].y == 0 && pos[i].x <= eps);
+		req |= (pos[i].y == 0 && pos[i].x >= 1 - eps);
+
+		req |= (pos[i].y == 1 && pos[i].x <= eps);
+		req |= (pos[i].y == 1 && pos[i].x >= 1 - eps);
+
+		if (req)
+			MMGS_Set_requiredVertex(mm, i + 1);
+	}
+
+	MMGS_mmgslib(mm, ss);
+	int np, nt, na;
+	MMGS_Get_meshSize(mm, &np, &nt, &na);
+
+	unload_mesh_from_mmg(mesh, data, mm, ss);
+
+	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
+		      MMG5_ARG_end);
+
+	/* MMGS will move some vertices out of [0.1] (close to corners), we
+	 * reproject them to the cube afterwards.
+	 */
+	fix_boundary_vertices(mesh, data);
+	
+	return 0;
+}
+
+
+
+
+int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg, const char *ext)
+{
+	struct Transform transf;
+	if (read_transform(transf, cfg)) {
+		printf("Could not read transform\n");
+		return (-1);
+	}
+
+	uint32_t index_count = mesh.index_count;
+	uint32_t vertex_count = mesh.vertex_count;
+	TArray<TVec3<uint16_t>> qpos(vertex_count);
+	for (size_t i = 0; i < vertex_count; ++i) {
+		Vec3 cubepos = data.positions[i];
+		cubepos *= transf.scale;
+		cubepos += transf.shift;
+		qpos[i].x = cubepos.x * ((1 << 16) - 1);
+		qpos[i].y = cubepos.y * ((1 << 16) - 1);
+		qpos[i].z = cubepos.z * ((1 << 16) - 1);
+	}
+	uint32_t *indices = data.indices + mesh.index_offset;
+	void *vertices = qpos.data;
+	size_t vertex_size = sizeof(TVec3<uint16_t>);
+	TArray<uint8_t> vbuf(
+	    meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
+	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices,
+					       vertex_count, vertex_size));
+	TArray<uint8_t> ibuf(
+	    meshopt_encodeIndexBufferBound(index_count, vertex_count));
+	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices,
+					      index_count));
+
+	char *fname = get_filename(cfg.x0, cfg.y0, cfg.out_dir, ext);
+	FILE *f = fopen(fname, "wb");
+	int ret = (f == NULL) || fwrite(vbuf.data, vbuf.size, 1, f) != 1 ||
+			  fwrite(ibuf.data, ibuf.size, 1, f) != 1
+		      ? -1
+		      : 0;
+	fclose(f);
+	free(fname);
+	return (ret);
+}
+
+
+int postprocess_surface_mesh(const Cfg &cfg)
+{
+	char *recon_out =
+	    get_filename(cfg.x0, cfg.y0, cfg.out_dir, "poisson.ply");
+
+	/* Load from Poisson Recon */
+	Mesh mesh;
+	MBuf data;
+	load_ply(mesh, data, recon_out);
+	printf("A total of %d (%.2f M) Tri after poisson reconstruct.\n",
+			mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+	
+	/* Remove spurious connected components if any */
+	int num_cc = select_principal_connected_component(mesh, data);
+	if (num_cc != 1) {
+		printf("Removed %d connected components.\n", num_cc - 1);
+		printf("A total of %d (%.2f M) Tri after spurious cc removal.\n",
+			mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+	}
+
+	/* Recut mesh to 1km boundary */
+	struct Transform transf;
+	read_transform(transf, cfg);
+	recut_mesh(mesh, data, transf);
+	printf("A total of %d (%.2f M) Tri after buffered boundary recut.\n",
+	    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+
+	/* Rescale and offset (scale is now 1 = 1km for x, y and z) */
+	rescale_and_offset_mesh(mesh, data, transf, cfg);
+	
+	if (cfg.hausd > 0) {
+		if (improve_mesh_quality(mesh, data, cfg)) {
+			printf("Error in MMGS\n");
+			return (-1);
+		}
+	}
+
+	if (cfg.optimize) {
+		timer_start();
+		/* Necessary to compact ? */
+		compact_mesh(mesh, data);
+		optimize_mesh(mesh, data);
+		timer_stop("Optimize");
+	}
+
+	/* Save final mesh */
+	if (cfg.encode) {
+		write_encoded_mesh(mesh, data, cfg, "final.bin");
+	} else {
+		write_mesh(mesh, data, cfg, "final.ply");
+	}
+
+	if (cfg.clean) {
+		unsigned short len = strlen(recon_out) + 8;
+		char *cmd = (char *)calloc(len, sizeof(*cmd));
+		snprintf(cmd, len, "rm -f %.256s", recon_out);
+		system(cmd);
+		free(cmd);
+	}
+
+	free(recon_out);
+
+	return (0);
+}
+
 /******************************************************************************
  *
  * IV. Main.
@@ -1232,15 +1220,13 @@ size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 int main(int argc, char **argv)
 {
 	struct Cfg cfg;
-	Mesh mesh;
-	MBuf data;
 
 	/* Process command line arguments */
 	if (process_args(argc, (const char **)argv, cfg)) {
 		return (-1);
 	}
 
-	printf("\n------ Dealing with %04d %04d ------\n", cfg.x0, cfg.y0);
+	printf("\n------ Start of swiss_lidar for %04d %04d ------\n", cfg.x0, cfg.y0);
 	print_cfg(cfg);
 
 	printf("\n");
@@ -1255,7 +1241,7 @@ int main(int argc, char **argv)
 	printf("II. Building surface mesh from point set :\n");
 	printf("------------------------------------------\n");
 
-	if (build_surface_mesh(mesh, data, cfg)) {
+	if (build_surface_mesh(cfg)) {
 		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
@@ -1264,42 +1250,12 @@ int main(int argc, char **argv)
 	printf("III. Postprocessing surface mesh.\n");
 	printf("---------------------------------\n");
 
-	timer_start();
-	uint32_t num_cc = select_principal_connected_component(mesh, data);
-	if (num_cc != 1)
-		printf("Removed %d connected components.\n", num_cc - 1);
-	timer_stop("Connected components");
-
-	if (cfg.simp_error > 0) {
-		simplify_mesh(mesh, data, cfg);
-	}
-	if (cfg.hausd > 0) {
-		if (improve_mesh_quality(mesh, data, cfg)) {
-			printf("Error in MMGS\n");
-			return (-1);
-		}
-	}
-
-	timer_start();
-	size_t bd_num = fix_boundary_vertices(mesh, data);
-	printf("Number of boundary vertices : %zu\n", bd_num);
-	timer_stop("Fix boundary");
-
-	if (cfg.optimize) {
-		timer_start();
-		optimize_mesh(mesh, data);
-		timer_stop("Optimize");
-	}
-
-	/* Save final mesh */
-	if (cfg.encode && quantize_encode_mesh(mesh, data, cfg)) {
-		printf("Error in mesh encoding\n");
+	if (postprocess_surface_mesh(cfg)) {
+		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
-
-	write_mesh(mesh, data, cfg, "final.ply");
-
-	printf("\n------ Finished with %04d %04d ------\n", cfg.x0, cfg.y0);
+	
+	printf("\n------ End of swiss_lidar for %04d %04d ------\n", cfg.x0, cfg.y0);
 	return (0);
 }
 
