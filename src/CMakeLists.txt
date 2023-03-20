@@ -31,10 +31,19 @@ add_executable(swiss_lidar
 	swiss_raster.cpp
 	swiss_lidar.cpp
 	)
-
 target_compile_features(swiss_lidar PRIVATE cxx_std_17)
 target_compile_options(swiss_lidar PRIVATE -Wall)
 target_link_libraries(swiss_lidar miniply meshoptimizer gdal ${swiss_lidar_SOURCE_DIR}/extern/mmg/libmmgs.a)
+
+add_executable(swiss_stitch
+	mesh.cpp
+	mesh_adjacency.cpp
+	mesh_ply.cpp
+	swiss_stitch.cpp
+	)
+target_link_libraries(swiss_stitch miniply)
+target_compile_features(swiss_stitch PRIVATE cxx_std_17)
+target_compile_options(swiss_stitch PRIVATE -Wall)
 
 add_executable(compute_normals
 	las_read.cpp

@@ -15,8 +15,6 @@ struct KdCoords {
 	inline size_t kdtree_get_point_count() const { return size; }
 	inline float kdtree_get_pt(const size_t idx, int dim) const
 	{
-		if (idx >= size)
-			printf("%zu %zu %d %d\n", idx, size, dim, d);
 		assert(idx < size && dim >= 0 && dim < d);
 		return pos[d * idx + dim];
 	}

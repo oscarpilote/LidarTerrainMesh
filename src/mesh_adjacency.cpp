@@ -158,3 +158,32 @@ uint32_t find_connected_components(const TArray<uint32_t> &triadj,
 
 	return (cur_cc);
 }
+
+uint32_t find_boundary(const EAdj &adj, TArray<bool> &is_bdy)
+{
+
+	size_t vertex_count = adj.vertex_count;
+	is_bdy.resize(vertex_count);
+	for (size_t i = 0; i < vertex_count; ++i) {
+		is_bdy[i] = false;
+	}
+
+	uint32_t bdy_num = 0;
+	const Edge *edges = &adj.edges[0];
+	for (size_t i = 0; i < vertex_count; ++i) {
+		uint32_t i0 = i;
+		uint32_t i1 = edges[i].dest;
+		uint32_t idx = edges[i].idx;
+		uint32_t off = vertex_count;
+		while (i1 != ~0u) {
+			if (!has_edge(adj, i1, i0)) {
+				is_bdy[i] = true;
+				bdy_num++;
+				break;
+			}
+			i1 = edges[off + idx].dest;
+			idx = edges[off + idx].idx;
+		}
+	}
+	return bdy_num;
+}

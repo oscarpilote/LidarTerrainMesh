@@ -70,7 +70,7 @@ if __name__ == '__main__':
             
             # LAS
             fname = os.path.join(base_dir, las_name(x, y))
-            if (not os.path.exists(os.path.join(base_dir, fname))):
+            if (not os.path.exists(fname)):
                 url = las_request(x, y)
                 if (url):
                     print("Downloading ", las_name(x,y))
@@ -91,7 +91,7 @@ if __name__ == '__main__':
             
             # Raster
             fname = os.path.join(base_dir, raster_name(x, y))
-            if (not os.path.exists(os.path.join(base_dir, fname))):
+            if (not os.path.exists(fname)):
                 url = raster_request(x, y)
                 if (url):
                     print("Downloading ", raster_name(x,y))

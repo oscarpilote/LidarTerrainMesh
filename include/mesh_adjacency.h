@@ -28,3 +28,4 @@ void fill_tri_adjacency(const Mesh &mesh, const MBuf &data, const EAdj &eadj,
 uint32_t find_connected_components(const TArray<uint32_t> &triadj,
 				   TArray<uint32_t> &cc);
 
+uint32_t find_boundary(const EAdj &adj, TArray<bool> &is_bdy);

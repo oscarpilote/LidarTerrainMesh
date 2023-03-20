@@ -94,8 +94,8 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.ani = (argc >= 11) ? atoi(argv[10]) : 0;
 	cfg.clean = (argc >= 12) ? atoi(argv[11]) : 0;
 	cfg.verbose = (argc >= 13) ? atoi(argv[12]) : 1;
-	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 0;
-	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 0;
+	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 1;
+	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 1;
 	cfg.nml_confidence = (argc >= 16) ? atoi(argv[15]) : 1;
 	cfg.x0_base = (argc >= 17) ? atoi(argv[16]) : cfg.x0;
 	cfg.y0_base = (argc >= 18) ? atoi(argv[17]) : cfg.y0;
@@ -1263,6 +1263,13 @@ int main(int argc, char **argv)
 	printf("\n");
 	printf("III. Postprocessing surface mesh.\n");
 	printf("---------------------------------\n");
+
+	timer_start();
+	uint32_t num_cc = select_principal_connected_component(mesh, data);
+	if (num_cc != 1)
+		printf("Removed %d connected components.\n", num_cc - 1);
+	timer_stop("Connected components");
+
 	if (cfg.simp_error > 0) {
 		simplify_mesh(mesh, data, cfg);
 	}
@@ -1272,12 +1279,6 @@ int main(int argc, char **argv)
 			return (-1);
 		}
 	}
-
-	timer_start();
-	uint32_t num_cc = select_principal_connected_component(mesh, data);
-	if (num_cc != 1)
-		printf("Removed %d connected components.\n", num_cc - 1);
-	timer_stop("Connected components");
 
 	timer_start();
 	size_t bd_num = fix_boundary_vertices(mesh, data);
