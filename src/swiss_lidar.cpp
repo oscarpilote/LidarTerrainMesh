@@ -47,7 +47,6 @@ struct Cfg {
 	char out_dir[128];
 	int depth;
 	float weight;
-	float simp_error;
 	float hausd;
 	float hgrad;
 	bool ani;
@@ -86,15 +85,14 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	}
 	cfg.depth = (argc >= 6) ? atoi(argv[5]) : 10;
 	cfg.weight = (argc >= 7) ? atof(argv[6]) : 4;
-	cfg.simp_error = (argc >= 8) ? atof(argv[7]) : 1e-4;
-	cfg.hausd = (argc >= 9) ? atof(argv[8]) : 0.15f;
-	cfg.hgrad = (argc >= 10) ? atof(argv[9]) : 5.f;
-	cfg.ani = (argc >= 11) ? atoi(argv[10]) : 0;
-	cfg.clean = (argc >= 12) ? atoi(argv[11]) : 0;
-	cfg.verbose = (argc >= 13) ? atoi(argv[12]) : 1;
-	cfg.optimize = (argc >= 14) ? atoi(argv[13]) : 1;
-	cfg.encode = (argc >= 15) ? atoi(argv[14]) : 1;
-	cfg.nml_confidence = (argc >= 16) ? atoi(argv[15]) : 1;
+	cfg.hausd = (argc >= 8) ? atof(argv[7]) : 0.1f;
+	cfg.hgrad = (argc >= 9) ? atof(argv[8]) : 5.f;
+	cfg.ani = (argc >= 10) ? atoi(argv[9]) : 0;
+	cfg.clean = (argc >= 11) ? atoi(argv[10]) : 1;
+	cfg.verbose = (argc >= 12) ? atoi(argv[11]) : 1;
+	cfg.optimize = (argc >= 13) ? atoi(argv[12]) : 0;
+	cfg.encode = (argc >= 14) ? atoi(argv[13]) : 0;
+	cfg.nml_confidence = (argc >= 15) ? atoi(argv[14]) : 1;
 
 	return (0);
 }
@@ -108,8 +106,7 @@ static void print_cfg(struct Cfg &cfg)
 	printf("Data  dir   : %s\n", cfg.base_dir);
 	printf("Output dir  : %s\n", cfg.out_dir);
 	printf("Verbosity   : %d\n", cfg.verbose ? 1 : 0);
-	printf("Simplify    : meshopt=%f,  hausd=%f , hgrad=%f\n",
-	       cfg.simp_error, cfg.hausd, cfg.hgrad);
+	printf("Simplify    : hausd=%f , hgrad=%f\n", cfg.hausd, cfg.hgrad);
 }
 
 static char *get_filename(int x, int y, const char *dir, const char *ext)
@@ -1096,14 +1093,12 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	 * reproject them to the cube afterwards.
 	 */
 	fix_boundary_vertices(mesh, data);
-	
+
 	return 0;
 }
 
-
-
-
-int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg, const char *ext)
+int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg,
+		       const char *ext)
 {
 	struct Transform transf;
 	if (read_transform(transf, cfg)) {
@@ -1145,7 +1140,6 @@ int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg, const
 	return (ret);
 }
 
-
 int postprocess_surface_mesh(const Cfg &cfg)
 {
 	char *recon_out =
@@ -1156,14 +1150,15 @@ int postprocess_surface_mesh(const Cfg &cfg)
 	MBuf data;
 	load_ply(mesh, data, recon_out);
 	printf("A total of %d (%.2f M) Tri after poisson reconstruct.\n",
-			mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
-	
+	       mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+
 	/* Remove spurious connected components if any */
 	int num_cc = select_principal_connected_component(mesh, data);
 	if (num_cc != 1) {
 		printf("Removed %d connected components.\n", num_cc - 1);
-		printf("A total of %d (%.2f M) Tri after spurious cc removal.\n",
-			mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+		printf(
+		    "A total of %d (%.2f M) Tri after spurious cc removal.\n",
+		    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
 	}
 
 	/* Recut mesh to 1km boundary */
@@ -1171,11 +1166,11 @@ int postprocess_surface_mesh(const Cfg &cfg)
 	read_transform(transf, cfg);
 	recut_mesh(mesh, data, transf);
 	printf("A total of %d (%.2f M) Tri after buffered boundary recut.\n",
-	    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+	       mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
 
 	/* Rescale and offset (scale is now 1 = 1km for x, y and z) */
 	rescale_and_offset_mesh(mesh, data, transf, cfg);
-	
+
 	if (cfg.hausd > 0) {
 		if (improve_mesh_quality(mesh, data, cfg)) {
 			printf("Error in MMGS\n");
@@ -1226,7 +1221,8 @@ int main(int argc, char **argv)
 		return (-1);
 	}
 
-	printf("\n------ Start of swiss_lidar for %04d %04d ------\n", cfg.x0, cfg.y0);
+	printf("\n------ Start of swiss_lidar for %04d %04d ------\n", cfg.x0,
+	       cfg.y0);
 	print_cfg(cfg);
 
 	printf("\n");
@@ -1254,8 +1250,9 @@ int main(int argc, char **argv)
 		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
-	
-	printf("\n------ End of swiss_lidar for %04d %04d ------\n", cfg.x0, cfg.y0);
+
+	printf("\n------ End of swiss_lidar for %04d %04d ------\n", cfg.x0,
+	       cfg.y0);
 	return (0);
 }
 

@@ -126,7 +126,8 @@ if __name__ == '__main__':
         # record commands
         commands = []
         for x in range(xmin, xmax + 1):
-            commands.append(f"python3 swiss_lidar.py {x} {y} data/ test/ > {x}_{y}.log")
+            commands.append(f"./build/release/src/swiss_lidar {x} {y} "
+                            f"{base_dir} {out_dir} > {x}_{y}.log 2>&1")
         # launch commands
         print("Launching commands")
         procs = [Popen(cmd, shell = True) for cmd in commands]
