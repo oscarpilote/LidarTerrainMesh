@@ -30,6 +30,7 @@
 
 /* Size of tile boundary buffer in cm */
 #define BDY_BUFFER 10000
+#define BDY_BUFFER_ADD 48000
 
 /* Save normal quality as PLY point color attribute */
 #define DEBUG_NML_CONFIDENCE 1
@@ -88,9 +89,9 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.hausd = (argc >= 8) ? atof(argv[7]) : 0.1f;
 	cfg.hgrad = (argc >= 9) ? atof(argv[8]) : 5.f;
 	cfg.ani = (argc >= 10) ? atoi(argv[9]) : 0;
-	cfg.clean = (argc >= 11) ? atoi(argv[10]) : 1;
+	cfg.clean = (argc >= 11) ? atoi(argv[10]) : 0;
 	cfg.verbose = (argc >= 12) ? atoi(argv[11]) : 1;
-	cfg.optimize = (argc >= 13) ? atoi(argv[12]) : 0;
+	cfg.optimize = (argc >= 13) ? atoi(argv[12]) : 1;
 	cfg.encode = (argc >= 14) ? atoi(argv[13]) : 0;
 	cfg.nml_confidence = (argc >= 15) ? atoi(argv[14]) : 1;
 
@@ -294,81 +295,52 @@ static inline void rebase_las_point(struct LasPoint &p, int dx, int dy)
 	p.y += dy * 100000;
 }
 
-static inline bool filter_las_point(const struct LasPoint &p)
+static inline bool filter_las_point(const struct LasPoint &p, int bdy_buffer)
 {
 	/* 100m boundary buffer size */
-	int bd = BDY_BUFFER;
+	const int bd = bdy_buffer;
 	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
 		   (p.y < 100000 + bd) && (p.classification == 2);
 	return (ret);
 }
 
-#if 1 /* Only fill holes left in the las dataset */
 static bool filter_raster_point(const struct LasPoint &p,
 				const TArray<uint32_t> &density, int N)
 {
 	/* 100m boundary buffer size */
-	int bd = BDY_BUFFER;
+	const int bd = BDY_BUFFER;
 	if ((p.x < -bd) || (p.x > 100000 + bd) || (p.y < -bd) ||
 	    (p.y > 100000 + bd)) {
 		return false;
 	}
 	/* Density check */
-	const float width = 100000 + 2 * BDY_BUFFER;
+	const float width = 100000 + 2 * bd;
 	const float invh = N / width;
-	int pix_x = ((float)p.x + BDY_BUFFER) * invh - 0.5f;
+	int pix_x = ((float)p.x + bd) * invh - 0.5f;
 	pix_x = pix_x < 0 ? 0 : pix_x;
 	pix_x = pix_x >= N ? N - 1 : pix_x;
-	int pix_y = ((float)p.y + BDY_BUFFER) * invh - 0.5f;
+	int pix_y = ((float)p.y + bd) * invh - 0.5f;
 	pix_y = pix_y < 0 ? 0 : pix_y;
 	pix_y = pix_y >= N ? N - 1 : pix_y;
 	int pix = pix_y * N + pix_x;
 	return (density[pix] == 0);
 }
 
-#else
-static bool filter_raster_point(const struct LasPoint &p, const float *alt,
-				int px, int py, int nx, int ny)
+static bool filter_bdy_raster_point(const struct LasPoint &p, int N)
 {
-	/* 100m boundary buffer size */
-	int bd = BDY_BUFFER;
-	if ((p.x < -bd) || (p.x > 100000 + bd) || (p.y < -bd) ||
-	    (p.y > 100000 + bd)) {
+	/* 500m to 100m boundary buffer size */
+	const int bd_in = BDY_BUFFER;
+	const int bd_out = BDY_BUFFER_ADD;
+	if ((p.x <= -bd_out) || (p.x >= 100000 + bd_out) || (p.y <= -bd_out) ||
+	    (p.y >= 100000 + bd_out)) {
 		return false;
 	}
-
-	/* Keep only points in non too steep terrain */
-	int r = px + 1 < nx ? px + 1 : px;
-	int l = px > 0 ? px - 1 : 0;
-	int u = py + 1 < ny ? py + 1 : py;
-	int d = py > 0 ? py - 1 : 0;
-
-	float alt_p = alt[py * nx + px];
-	float alt_r = alt[py * nx + r];
-	float alt_l = alt[py * nx + l];
-	float alt_u = alt[u * nx + px];
-	float alt_d = alt[d * nx + px];
-
-	float min_x, max_x, min_y, max_y;
-	min_x = max_x = alt_p;
-	min_x = MIN(min_x, alt_r);
-	min_x = MIN(min_x, alt_l);
-	max_x = MAX(max_x, alt_r);
-	max_x = MAX(max_x, alt_l);
-	min_y = max_y = alt_p;
-	min_y = MIN(min_y, alt_u);
-	min_y = MIN(min_y, alt_d);
-	max_y = MAX(max_y, alt_u);
-	max_y = MAX(max_y, alt_d);
-
-	/* kind of... */
-	float slope_x = (max_x - min_x) * nx / (2 * 1000);
-	float slope_y = (max_y - min_y) * ny / (2 * 1000);
-	float slope = MAX(slope_x, slope_y);
-
-	return slope < 1;
+	if ((p.x >= -bd_in) && (p.x <= 100000 + bd_in) && (p.y >= -bd_in) &&
+	    (p.y <= 100000 + bd_in)) {
+		return false;
+	}
+	return (true);
 }
-#endif
 
 static int get_las_counts(TArray<int> &source_ids, TArray<int> &source_counts,
 			  int x0, int y0, const char *base_dir)
@@ -395,7 +367,7 @@ static int get_las_counts(TArray<int> &source_ids, TArray<int> &source_counts,
 			const char *raw = raw_data + i * info.point_size;
 			p = las_read_point(raw, info.point_format);
 			rebase_las_point(p, dx, dy);
-			if (!filter_las_point(p))
+			if (!filter_las_point(p, BDY_BUFFER))
 				continue;
 			int idx = get_source_idx(source_ids, p.source_id);
 			if (idx >= 0) {
@@ -446,7 +418,7 @@ static void fill_las_points(TArray<struct LasPoint> &points,
 			const char *raw = raw_data + i * info.point_size;
 			p = las_read_point(raw, info.point_format);
 			rebase_las_point(p, dx, dy);
-			if (!filter_las_point(p))
+			if (!filter_las_point(p, BDY_BUFFER))
 				continue;
 			int idx = get_source_idx(ids, p.source_id);
 			assert(idx >= 0);
@@ -530,12 +502,7 @@ static size_t get_raster_point_count(int x0, int y0, const char *base_dir,
 					continue;
 				p.z = (int)(100 * altitudes[nx * py + px]);
 				rebase_las_point(p, dx, dy);
-#if 1
 				if (filter_raster_point(p, density, N))
-#else
-				if (filter_raster_point(p, altitudes.data, px,
-							py, nx, ny))
-#endif
 					++raster_point_count;
 			}
 		}
@@ -577,12 +544,7 @@ static size_t fill_raster_points(TArray<struct LasPoint> &points, size_t offset,
 				p.z = (int)(100 * altitudes[nx * py + px]);
 				p.source_idx = dummy_source_idx;
 				rebase_las_point(p, dx, dy);
-#if 1
 				if (filter_raster_point(p, density, N))
-#else
-				if (filter_raster_point(p, altitudes.data, px,
-							py, nx, ny))
-#endif
 					points[point_idx++] = p;
 			}
 		}
@@ -590,8 +552,53 @@ static size_t fill_raster_points(TArray<struct LasPoint> &points, size_t offset,
 	return (point_idx - offset);
 }
 
-static void build_point_density_matrix(const TArray<struct LasPoint> &points,
-				       TArray<uint32_t> &density, int N)
+static size_t fill_bdy_raster_points(TArray<struct LasPoint> &points,
+				     size_t offset, int dummy_source_idx,
+				     int x0, int y0, const char *base_dir,
+				     int min_z, int max_z, int N)
+{
+	size_t point_idx = offset;
+	for (int i = 0; i < 9; ++i) {
+		int dx = (i % 3) - 1;
+		int dy = (i / 3) - 1;
+		int x = x0 + dx;
+		int y = y0 + dy;
+		char *fname = get_filename(x, y, base_dir, "tif");
+		int nx;
+		int ny;
+		if (read_swiss_geotiff(NULL, &nx, &ny, fname, true) || !nx ||
+		    !ny) {
+			free(fname);
+			continue;
+		}
+
+		TArray<float> altitudes(nx * ny);
+		read_swiss_geotiff(altitudes.data, &nx, &ny, fname);
+		free(fname);
+		for (int py = 0; py < ny; ++py) {
+			for (int px = 0; px < nx; ++px) {
+				struct LasPoint p;
+				p.x = (2 * px + 1) * 50 * 1000 / nx;
+				p.y = (2 * (ny - py) - 1) * 50 * 1000 / ny;
+				/* No data check */
+				if (altitudes[nx * py + px] < -500)
+					continue;
+				p.z = (int)(100 * altitudes[nx * py + px]);
+				p.z = p.z > max_z ? max_z : p.z;
+				p.z = p.z < min_z ? min_z : p.z;
+				p.source_idx = dummy_source_idx;
+				rebase_las_point(p, dx, dy);
+				if (filter_bdy_raster_point(p, N))
+					points[point_idx++] = p;
+			}
+		}
+	}
+	return (point_idx - offset);
+}
+
+static void
+build_las_point_density_matrix(const TArray<struct LasPoint> &points,
+			       TArray<uint32_t> &density, int N)
 {
 	density.clear();
 	density.resize(N * N);
@@ -614,33 +621,59 @@ static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 					  TArray<struct SourceFlightLine> &fls,
 					  const struct Cfg &cfg)
 {
-	const uint32_t N = 600;
-	TArray<uint32_t> density;
-	build_point_density_matrix(points, density, N);
+	size_t raster_point_count = 0;
 
+	const uint32_t N = (100000 + 2 * BDY_BUFFER) / 200;
+	TArray<uint32_t> density;
+	build_las_point_density_matrix(points, density, N);
+
+	/* Get hole filling raster points */
 	uint32_t empty_pix = 0;
 	for (size_t pix = 0; pix < N * N; pix++) {
 		if (!density[pix])
 			empty_pix++;
 	}
+	if (empty_pix) {
+		raster_point_count = get_raster_point_count(
+		    cfg.x0, cfg.y0, cfg.base_dir, density, N);
+	}
+	if (raster_point_count) {
+		size_t offset = points.size;
+		points.reserve(points.size + raster_point_count);
+		points.resize(points.size + raster_point_count);
+		size_t dummy_source_idx = fls.size;
+		fls.resize(fls.size + 1);
+		fls[fls.size - 1].is_valid = false;
+		fill_raster_points(points, offset, dummy_source_idx, cfg.x0,
+				   cfg.y0, cfg.base_dir, density, N);
+	}
 
-	if (!empty_pix)
-		return 0;
-
-	size_t raster_point_count =
-	    get_raster_point_count(cfg.x0, cfg.y0, cfg.base_dir, density, N);
-
-	if (!raster_point_count)
-		return 0;
-
-	size_t offset = points.size;
-	points.reserve(points.size + raster_point_count);
-	points.resize(points.size + raster_point_count);
-	size_t dummy_source_idx = fls.size;
-	fill_raster_points(points, offset, dummy_source_idx, cfg.x0, cfg.y0,
-			   cfg.base_dir, density, N);
-	fls.resize(fls.size + 1);
-	fls[fls.size - 1].is_valid = false;
+	/* Enlarge boundary buffer ? */
+	int min_z = INT_MAX, max_z = -INT_MAX;
+	for (size_t i = 0; i < points.size; ++i) {
+		min_z = MIN(min_z, points[i].z);
+		max_z = MAX(max_z, points[i].z);
+	}
+	float span = (max_z - min_z) * 0.01f;
+	if (span >= 1250.f) {
+		size_t offset = points.size;
+		size_t n_out = (100000 + 2 * BDY_BUFFER_ADD) / 200;
+		size_t n_in = (100000 + 2 * BDY_BUFFER) / 200;
+		size_t max_bdy_raster_point =
+		    (n_out + n_in + 1) * (n_out - n_in + 1);
+		points.reserve(points.size + max_bdy_raster_point);
+		points.resize(points.size + max_bdy_raster_point);
+		if (!raster_point_count) {
+			fls.resize(fls.size + 1);
+			fls[fls.size - 1].is_valid = false;
+		}
+		size_t bdy_raster_point_count = fill_bdy_raster_points(
+		    points, offset, fls.size - 1, cfg.x0, cfg.y0, cfg.base_dir,
+		    min_z, max_z, N);
+		assert(bdy_raster_point_count <= max_bdy_raster_point);
+		points.resize(offset + bdy_raster_point_count);
+		raster_point_count += bdy_raster_point_count;
+	}
 
 	return raster_point_count;
 }
@@ -1100,34 +1133,31 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg,
 		       const char *ext)
 {
-	struct Transform transf;
-	if (read_transform(transf, cfg)) {
-		printf("Could not read transform\n");
-		return (-1);
-	}
-
 	uint32_t index_count = mesh.index_count;
 	uint32_t vertex_count = mesh.vertex_count;
 	TArray<TVec3<uint16_t>> qpos(vertex_count);
 	for (size_t i = 0; i < vertex_count; ++i) {
-		Vec3 cubepos = data.positions[i];
-		cubepos *= transf.scale;
-		cubepos += transf.shift;
-		qpos[i].x = cubepos.x * ((1 << 16) - 1);
-		qpos[i].y = cubepos.y * ((1 << 16) - 1);
-		qpos[i].z = cubepos.z * ((1 << 16) - 1);
+		Vec3 pos = data.positions[i + mesh.vertex_offset];
+		qpos[i].x = pos.x * (1 << 15) + (1 << 14);
+		qpos[i].y = pos.y * (1 << 15) + (1 << 14);
+		qpos[i].z = pos.z * (1 << 14); /* TODO : scale in z */
 	}
 	uint32_t *indices = data.indices + mesh.index_offset;
-	void *vertices = qpos.data;
-	size_t vertex_size = sizeof(TVec3<uint16_t>);
+	// void *vertices = qpos.data;
+	// size_t vertex_size = sizeof(TVec3<uint16_t>);
+	void *vertices = data.positions + mesh.vertex_offset;
+	size_t vertex_size = sizeof(Vec3);
 	TArray<uint8_t> vbuf(
 	    meshopt_encodeVertexBufferBound(vertex_count, vertex_size));
 	vbuf.resize(meshopt_encodeVertexBuffer(&vbuf[0], vbuf.size, vertices,
 					       vertex_count, vertex_size));
+	printf("Bytes per vertex : %.1f\n", (float)vbuf.size / vertex_count);
 	TArray<uint8_t> ibuf(
 	    meshopt_encodeIndexBufferBound(index_count, vertex_count));
 	ibuf.resize(meshopt_encodeIndexBuffer(&ibuf[0], ibuf.size, indices,
 					      index_count));
+	printf("Index bytes per triangle : %.1f\n",
+	       3 * (float)ibuf.size / index_count);
 
 	char *fname = get_filename(cfg.x0, cfg.y0, cfg.out_dir, ext);
 	FILE *f = fopen(fname, "wb");

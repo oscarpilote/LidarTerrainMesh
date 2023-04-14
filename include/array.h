@@ -120,8 +120,6 @@ template <typename T>
 inline void TArray<T>::clear()
 {
 	size = 0;
-	// capacity = 0;
-	free(data);
 }
 
 template <typename T>

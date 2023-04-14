@@ -29,7 +29,7 @@ int inline get_source_idx(const TArray<int> &sources, int source_id)
 
 inline bool filter_point(const struct LasPoint &p)
 {
-	return (p.classification == 2);
+	return (1); // p.classification == 2);
 }
 
 int get_ids_and_counts(TArray<int> &source_ids, TArray<int> &source_counts,
@@ -192,42 +192,65 @@ int main(int argc, char **argv)
 	printf("\n");
 	printf("Orienting normals :\n");
 	TArray<EOrient> oriented(point_num, ENone);
-	size_t unsettled;
-	// unsettled = orient_normals_with_z(nml, oriented);
-	// printf("    Oriented after positive z pass : %.0f %%\n",
-	//        (nml.size - unsettled) * 100.0 / nml.size);
-	unsettled =
+	size_t unsettled =
 	    orient_nml_with_scan(points.data, point_num, fls.data, source_num,
 				 qual.data, data.normals, oriented.data);
 	printf("    Oriented after scanlines orientation pass : %.0f %%\n",
 	       (point_num - unsettled) * 100.0 / point_num);
+	unsettled = orient_nml_with_z(data.normals, oriented.data, point_num,
+				      qual.data);
+	printf("    Oriented after positive z pass : %.0f %%\n",
+	       (point_num - unsettled) * 100.0 / point_num);
 	float progress = 1;
-	while (unsettled && progress > 0.01) {
-		size_t newly_settled =
-		    propagate_nml_once(data.positions, point_num, tree,
-				       qual.data, data.normals, oriented.data);
+	int pass = 1;
+	while (unsettled && progress > 0.0001 && pass < 20) {
+		size_t newly_settled = propagate_nml_once(
+		    data.positions, point_num, tree, qual.data, data.normals,
+		    oriented.data, 6, 0.7);
 		progress = (float)newly_settled / unsettled;
 		unsettled -= newly_settled;
-		printf("    Oriented after propagate once pass : %.1f %%\n",
-		       (point_num - unsettled) * 100.0 / point_num);
+		printf("\r    Oriented after propagate pass %d : %.1f %%\n",
+		       pass++, (point_num - unsettled) * 100.0 / point_num);
+		fflush(stdout);
 	}
+	printf("\n");
 
-	/* Clean-up no longer necessary LAS data */
-	points.dispose();
-	stats.dispose();
-	fls.dispose();
-	qual.dispose();
-
-	/* Write oriented points to PLY file */
-	size_t final_points = 0;
-	for (size_t i = 0; i < point_num; ++i) {
+#if 1
+	/*weight normals according to orientation found and quality */
+	for (size_t i = 0; i < points.size; ++i) {
+		float weight = (oriented[i] != ENone) ? qual[i] : 0;
+		data.normals[i] *= weight;
+	}
+#else
+	/* Skip points with no orientation found */
+	size_t new_num = 0;
+	for (size_t i = 0; i < points.size; ++i) {
 		if (oriented[i] != ENone) {
-			data.positions[final_points] = data.positions[i];
-			data.normals[final_points] = data.normals[i];
-			final_points++;
+			data.positions[new_num] = data.positions[i];
+			data.normals[new_num] = data.normals[i];
+			new_num++;
 		}
 	}
-	mesh.vertex_count = final_points;
+	printf("    %.1f %% vertices discarded due to lack of clear "
+	       "orientation.\n",
+	       unset * 100.f / points.size);
+	mesh.vertex_count = new_num;
+}
+#endif
+#if 1
+	data.add_vtx_attr(VtxAttr::COL);
+	for (size_t i = 0; i < mesh.vertex_count; ++i) {
+		uint8_t &r = data.colors[i].x;
+		uint8_t &g = data.colors[i].y;
+		uint8_t &b = data.colors[i].z;
+		float bfloat = 1 - 2 * std::abs(qual[i] - 0.5f);
+		float rfloat = qual[i] < 0.5f ? 1 - bfloat : 0;
+		float gfloat = qual[i] > 0.5f ? 1 - bfloat : 0;
+		r = int(255 * rfloat + 0.5f);
+		g = int(255 * gfloat + 0.5f);
+		b = int(255 * bfloat + 0.5f);
+	}
+#endif
 
 	write_ply("normal_test.ply", mesh, data);
 

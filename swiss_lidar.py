@@ -109,7 +109,7 @@ if __name__ == '__main__':
 
     # Launch reconstruction
     cmd = f"./build/release/src/swiss_lidar {x0} {y0} {base_dir} {out_dir} " \
-            "10 4 0 0.1 5"
+            "10 4 0.1 5"
     print(cmd);
     os.system(cmd)
 
