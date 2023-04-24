@@ -109,7 +109,7 @@ size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
 				}
 			}
 		}
-		if (majority != 0 && abs(majority) == votes) {
+		if (majority != 0 && abs(majority) >= votes / 2) {
 			oriented[i] = ETmpPlague;
 			newly_settled++;
 			if (majority < 0)

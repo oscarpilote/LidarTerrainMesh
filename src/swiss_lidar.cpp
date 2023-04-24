@@ -795,7 +795,7 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 
 	float progress = 1.f;
 	int pass = 1;
-	while (unset && progress > 0.0001f && pass < 20) {
+	while (unset && progress > 0 && pass < 300) {
 		size_t newly_set =
 		    propagate_nml_once(data.positions, points.size, kdtree,
 				       qual.data, data.normals, oriented.data);

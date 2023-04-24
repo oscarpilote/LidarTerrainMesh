@@ -2,11 +2,23 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "mesh.h"
-#include "multigrid.h"
 
-int load_pyramid(MPyramid &mp, MBuf &data, const char *fname);
-int append int save_pyramid(const MPyramid &mp, const MBuf &data,
-			    const char *fname);
+struct MCell {
+	float xll;
+	float yll;
+	float extent;
+};
+
+struct MPyr {
+	MCell base;
+	int levels;
+};
+
+int mg_load_cell(Mesh &m, MBuf &data, MPyr pyr, MCell cell, FILE *f);
+
+int mg_append_cell(const Mesh &m, const MBuf &data, MPyr pyr, MCell cell,
+		   FILE *f);
 

@@ -5,9 +5,9 @@
 
 #include "las_source.h"
 
-#define ORIENT_PROBES 10
+#define ORIENT_PROBES 15
 #define SCAN_TOL 0.25
-#define FLIP_PROBES 6
+#define FLIP_PROBES 15
 #define FLIP_TOL 0.85
 #define NML_Z_THRESH 0.55
 
