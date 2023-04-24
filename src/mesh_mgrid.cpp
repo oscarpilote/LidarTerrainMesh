@@ -32,20 +32,23 @@ struct Cell2DInfo {
 	float scale_z;
 };
 
-int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, Cell2D cell,
-		 Pyramid2D pyr, Cell2D cell, FILE *f)
+int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, const Cell2D &cell,
+		 const Pyramid2D &p, FILE *f)
 {
 	int rank = get_cell_index(cell, pyr);
-	size_t offset = 0;
-	offset += sizeof(Pyramid2D);
-	offset += rank * (sizeof(size_t) + sizeof(Cell2DInfo));
-	fseek(f, offset, SEEK_SET);
+	if (rank < 0) {
+		return (-1);
+	}
+	size_t meta_offset = sizeof(Pyramid2D) +
+		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	fseek(f, meta_offset, SEEK_SET);
 	/* Read data offset */
-	if (fread(&offset, sizeof(size_t), 1, f) != 1) {
+	size_t data_offset;
+	if (!fread(&data_offset, sizeof(size_t), 1, f)) {
 		return -1;
 	}
 	/* Read cell info */
-	if (fread(&info, sizeof(Cell2DInfo), 1, f) != 1) {
+	if (!fread(&info, sizeof(Cell2DInfo), 1, f)) {
 		return -1;
 	}
 	if (!info.vtx_count || !info.idx_count) {
@@ -53,9 +56,9 @@ int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, Cell2D cell,
 		return 0;
 	}
 	/* Jump to cell data */
-	fseek(f, offset, SEEK_SET);
+	fseek(f, data_offset, SEEK_SET);
 	/* Read cell data */
-	if (!fread(vtx, info.vtx_count * sizeof(uint16_t), 1, f)) {
+	if (!fread(vtx, 3 * info.vtx_count * sizeof(uint16_t), 1, f)) {
 		return -1;
 	}
 	if (!fread(idx, info.idx_count * sizeof(uint32_t), 1, f)) {
@@ -64,40 +67,84 @@ int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, Cell2D cell,
 	return 0;
 }
 
-int mg_append_cell(const Cell2D &cellMesh &m, const MBuf &data, MPyr pyr,
-		   MCell cell, FILE *f)
+int mg_append_cell(const Cell &cell, const Cell2D &info, const uint16_t *vtx,
+		const uint32_t *idx, const uint32_t *remap, const Pyramid2D &p,
+		FILE *f)
+
 {
-
+	int rank = get_cell_index(cell, p);
+	if (rank < 0) {
+		return (-1);
+	}
+	
+	/* Get file size */
 	fseek(f, 0, SEEK_END);
-	size_t offset = ftell(f);
-	void *orig;
+	size_t data_offset = ftell(f);
 
-	orig = data.positions + m.vertex_offset;
-	if (fwrite(orig, sizeof(*data.positions), m.vertex_count, f) !=
-	    m.vertex_count) {
+	/* Append data at end of file */
+	if (!fwrite(vtx, 3 * info.vtx_count * sizeof(uint16_t), 1, f)) {
 		return -1;
 	}
-	orig = data.remap + m.vertex_offset;
-	if (fwrite(orig, sizeof(*data.remap), m.vertex_count, f) !=
-	    m.vertex_count) {
+	if (!fwrite(idx, info.idx_count * sizeof(uint32_t), 1, f)) {
 		return -1;
 	}
-
-	orig = data.indices + m.index_offset;
-	if (fwrite(orig, sizeof(*data.indices), m.index_count, f) !=
-	    m.index_count) {
+	if (remap) {
+		if (!fwrite(remap, info.vtx_count * sizeof(uint32_t), 1, f)) {
+			return -1;
+		}
+	} else {
+		uint32_t dummy = (-1);
+		uint32_t count = info.vtx_count;
+		if (fwrite(&dummy, sizeof(uint32_t), count, f) != count) {
+			return -1;
+		}
+	}
+	/* Rewind to write metadata */
+	size_t meta_offset = sizeof(Pyramid2D) +
+		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	fseek(f, meta_offset, SEEK_SET);
+	/* Write data offset */
+	if (!fwrite(&data_offset, sizeof(size_t), 1, f)) {
 		return -1;
 	}
+	if (!fwrite(&info, sizeof(Cell2DInfo), 1, f)) {
+		return -1;
+	}
+	return 0;
+}
 
-	MCellInfo cinfo;
-	cinfo.vtx_count = m.vertex_count;
-	cinfo.idx_count = m.index_count;
-	cinfo.offset = offset;
+int mg_update_cell(const Cell2D &cell, const uint32_t *remap, 
+		const Pyramid2D &p, FILE *f)
 
-	int rank = get_pos_in_pyramid(pyr, cell);
-	offset = sizeof(MPyr) + rank * sizeof(MCellInfo);
-	fseek(f, 0, SEEK_SET);
-	if (fwrite(&cinfo, sizeof(MCellInfo), 1, f) != 1) {
+{
+	int rank = get_cell_index(cell, p);
+	if (rank < 0) {
+		return (-1);
+	}
+	/* Read cell metadata */
+	size_t meta_offset = sizeof(Pyramid2D) + 
+		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	fseek(f, meta_offset, SEEK_SET);
+	/* Read data offset */
+	size_t data_offset;
+	if (!fread(&data_offset, sizeof(size_t), 1, f)) {
+		return -1;
+	}
+	/* Read cell info */
+	Cell2DInfo info;
+	if (!fread(&info, sizeof(Cell2DInfo), 1, f)) {
+		return -1;
+	}
+	if (!info.vtx_count || !info.idx_count) {
+		/* Empty cell is OK*/
+		return 0;
+	}
+	/* Jump to cell data */
+	size_t remap_offset = data_offset 
+		+ 3 * info.vtx_count * sizeof(uint16_t)
+		+ info.idx_count * sizeof(uint32_t);
+	fseek(f, remap_offset, SEEK_SET);
+	if (!fwrite(remap, info.vtx_count * sizeof(uint32_t), 1, f)) {
 		return -1;
 	}
 	return 0;
