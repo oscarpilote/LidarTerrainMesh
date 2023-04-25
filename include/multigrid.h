@@ -2,45 +2,45 @@
 
 #include <stdint.h>
 
-struct Cell2D {
+struct CellCoord {
 	int nx;
 	int ny;
 	int zl;
 };
 
-struct Pyramid2D {
-	Cell2D base;
+struct Pyramid {
+	CellCoord base;
 	int sublevels;
 };
 
-inline struct Cell2D cell_child(struct Cell2D parent, int k)
+inline struct CellCoord cell_child(struct CellCoord parent, int k)
 {
-	struct Cell2D child;
+	struct CellCoord child;
 	child.nx = 2 * parent.nx + (k & 1);
 	child.ny = 2 * parent.ny + (k & 2 ? 1 : 0);
 	child.zl = parent.zl + 1;
 	return child;
 }
 
-inline struct Cell2D cell_parent(struct Cell2D child)
+inline struct CellCoord cell_parent(struct CellCoord child)
 {
-	struct Cell2D parent;
+	struct CellCoord parent;
 	parent.nx = (child.nx - (child.nx < 0)) / 2;
 	parent.ny = (child.ny - (child.ny < 0)) / 2;
 	parent.zl = child.zl - 1;
 	return parent;
 }
 
-int get_cell_index(const Cell2D &cell, const Pyramid2D p)
+inline int get_cell_index(const CellCoord &c, const Pyramid &p)
 {
-	if (cell.zl < p.base.zl)
+	if (c.zl < p.base.zl)
 		return (-1);
-	if (cell.zl > p.base.zl + p.sublevels) {
+	if (c.zl > p.base.zl + p.sublevels) {
 		return (-1);
 	}
-	int N = 1 << (cell.zl - p.base.zl);
-	int di = cell.nx - (p.base.nx * N);
-	int dj = cell.ny - (p.base.ny * N);
+	int N = 1 << (c.zl - p.base.zl);
+	int di = c.nx - (p.base.nx * N);
+	int dj = c.ny - (p.base.ny * N);
 	if (di < 0 || di >= N || dj < 0 || dj >= N) {
 		return (-1);
 	}

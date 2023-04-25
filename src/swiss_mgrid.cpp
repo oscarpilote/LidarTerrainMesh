@@ -10,23 +10,25 @@
 #include "math_utils.h"
 #include "mesh.h"
 #include "mesh_ply.h"
+#include "mesh_mgrid.h"
 
-struct EncVertexHasher {
-	static constexpr size_t empty_key = ~static_cast<size_t>(0);
-	size_t hash(size_t key) const { return murmur2_64(0, key); }
-	bool is_empty(size_t key) const { return (key == empty_key); }
-	bool is_equal(size_t key1, size_t key2) const { return (key1 == key2); }
+struct EncVertex{
+	union {
+		size_t key;
+		struct {
+			uint16_t ux;
+			uint16_t uy;
+			uint16_t uz;
+			uint16_t cidx;
+		};
+	};
 };
 
-struct CellInfo {
-	uint32_t offset;
-	uint32_t idx_count;
-	uint32_t vtx_count;
-	float max_z;
-	float min_z;
-	float shift_x;
-	float shift_y;
-	float shift_z;
+struct EncVertexHasher {
+	static constexpr EncVertex empty = {~static_cast<size_t>(0)};
+	size_t hash(EncVertex v) const { return murmur2_64(0, v.key); }
+	bool is_empty(EncVertex v) const { return (v.key == empty.key); }
+	bool is_equal(EncVertex v1, EncVertex v2) const { return (v1.key == v2.key); }
 };
 
 int init_mgrid(const char *fin, const char *fout)
@@ -36,18 +38,21 @@ int init_mgrid(const char *fin, const char *fout)
 	load_ply(mesh, data, fin);
 
 	constexpr uint32_t DIV = 4;
-	TArray<CellInfo> cells(DIV * DIV);
-	/* Set cells shift_x and shift_y; */
+	TArray<CellMeshInfo> info(DIV * DIV);
+	TArray<float> shift_x(DIV * DIV);
+	TArray<float> shift_y(DIV * DIV);
+	TArray<float> max_z(DIV * DIV);
+	TArray<float> min_z(DIV * DIV);
+	TArray<uint32_t> offset(DIV * DIV);
+	/* Initialization */
 	for (size_t i = 0; i < DIV * DIV; ++i) {
-		cells[i].shift_x = (i & (DIV - 1)) * (1.f / DIV);
-		cells[i].shift_y = (i / DIV) * (1.f / DIV);
-	}
-	/* Init idx_count and vtx_count to 0, and min_z max_z to out of range */
-	for (size_t i = 0; i < DIV * DIV; ++i) {
-		cells[i].idx_count = 0;
-		cells[i].vtx_count = 0;
-		cells[i].max_z = -1;
-		cells[i].min_z = 9;
+		info[i].idx_count = 0;
+		info[i].vtx_count = 0;
+		info[i].scale_z = 2;
+		shift_x[i] = (i & (DIV - 1)) * (1.f / DIV);
+		shift_y[i] = (i / DIV) * (1.f / DIV);
+		max_z[i] = -1;
+		min_z[i] = 9;
 	}
 	/* Split indices accoding to cell of barycenter and set min_z / max_z */
 	size_t tri_count = mesh.index_count / 3;
@@ -66,54 +71,50 @@ int init_mgrid(const char *fin, const char *fout)
 		int cell_y = floor(bary.y * DIV);
 		cell_y = (cell_y < 0) ? 0 : cell_y;
 		cell_y = (cell_y >= (int)DIV) ? DIV - 1 : cell_y;
-		int cell_idx = cell_x + cell_y * DIV;
+		int cidx = cell_x + cell_y * DIV;
 		/* Update max in min altitudes in cell */
-		cells[cell_idx].max_z = MAX(cells[cell_idx].max_z, v0.z);
-		cells[cell_idx].max_z = MAX(cells[cell_idx].max_z, v1.z);
-		cells[cell_idx].max_z = MAX(cells[cell_idx].max_z, v2.z);
-		cells[cell_idx].min_z = MIN(cells[cell_idx].min_z, v0.z);
-		cells[cell_idx].min_z = MIN(cells[cell_idx].min_z, v1.z);
-		cells[cell_idx].min_z = MIN(cells[cell_idx].min_z, v2.z);
+		max_z[cidx] = MAX(max_z[cidx], v0.z);
+		max_z[cidx] = MAX(max_z[cidx], v1.z);
+		max_z[cidx] = MAX(max_z[cidx], v2.z);
+		min_z[cidx] = MIN(min_z[cidx], v0.z);
+		min_z[cidx] = MIN(min_z[cidx], v1.z);
+		min_z[cidx] = MIN(min_z[cidx], v2.z);
 		/* Update dico and idx counts */
-		tri_idx_to_cell_idx[i] = cell_idx;
-		cells[cell_idx].idx_count += 3;
+		tri_idx_to_cell_idx[i] = cidx;
+		info[cidx].idx_count += 3;
 	}
 	/* Set shift_z */
 	for (size_t i = 1; i < DIV * DIV; ++i) {
-		printf("Span : %f\n", cells[i].max_z - cells[i].min_z);
-		cells[i].shift_z = floor((1 << 6) * cells[i].min_z) / (1 << 6);
-		if (cells[i].shift_z < 0)
-			cells[i].shift_z -= 1.f / (1 << 6);
+		printf("Span : %f\n", max_z[i] - min_z[i]);
+		float scal = info[i].scale_z;
+		info[i].shift_z = scal * floor(100000 * min_z[i] /scal);
 	}
-	/* Accumulate idx_counts to offset and reset the latter */
+	/* Accumulate idx_counts to offset and (tempo.) reset the latter */
 	uint32_t total_idx = 0;
 	for (size_t i = 0; i < DIV * DIV; ++i) {
-		cells[i].offset = total_idx;
-		total_idx += cells[i].idx_count;
-		cells[i].idx_count = 0;
+		offset[i] = total_idx;
+		total_idx += info[i].idx_count;
+		info[i].idx_count = 0;
 	}
 
 	/* Hash table for vertices in cells */
-	HashTable<size_t, uint32_t, EncVertexHasher> table(total_idx);
+	HashTable<EncVertex, uint32_t, EncVertexHasher> table(total_idx);
 	TArray<uint32_t> cells_idx(total_idx);
-	TArray<size_t> cells_vtx(total_idx);
+	TArray<uint16_t> cells_vtx(total_idx);
 	for (size_t i = 0; i < tri_count; ++i) {
-		uint32_t cell_idx = tri_idx_to_cell_idx[i];
-		CellInfo &c = cells[cell_idx];
+		uint32_t cidx = tri_idx_to_cell_idx[i];
+		CellMeshInfo &c = info[cidx]; 
 		uint32_t v_idx[3];
 		for (int k = 0; k < 3; ++k) {
 			uint32_t *pval;
 			const Vec3 v = positions[indices[3 * i + k]];
-			size_t enc = 0;
-			enc += (v.x - c.shift_x) * (1 << 15) * DIV + (1 << 14);
-			enc <<= 16;
-			enc += (v.y - c.shift_y) * (1 << 15) * DIV + (1 << 14);
-			enc <<= 16;
-			enc += (v.z - c.shift_z) * (1 << 15);
-			enc <<= 16;
-			enc += cell_idx;
-			pval = table.get_or_set(enc, c.vtx_count);
-			size_t *vtx = &cells_vtx[c.offset];
+			EncVertex ev;
+			ev.ux = (v.x - shift_x[cidx]) * (1 << 15) * DIV + (1 << 14);
+			ev.uy = (v.y - shift_y[cidx]) * (1 << 15) * DIV + (1 << 14);
+			ev.uz = (100000 * v.z - c.shift_z) / c.scale_z;
+			ev.cidx = cidx;
+			pval = table.get_or_set(ev, c.vtx_count);
+			uint16_t *vtx = &cells_vtx[3 * offset[cidx]];
 			if (!pval) {
 				v_idx[k] = c.vtx_count;
 				vtx[c.vtx_count++] = enc - cell_idx;
@@ -124,7 +125,7 @@ int init_mgrid(const char *fin, const char *fout)
 		if (v_idx[0] == v_idx[1] || v_idx[1] == v_idx[2] ||
 		    v_idx[0] == v_idx[2])
 			continue;
-		uint32_t *idx = &cells_idx[c.offset];
+		uint32_t *idx = &cells_idx[offset[cidx]];
 		idx[c.idx_count++] = v_idx[0];
 		idx[c.idx_count++] = v_idx[1];
 		idx[c.idx_count++] = v_idx[2];

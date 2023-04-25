@@ -3,9 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "mesh.h"
-#include "multigrid.h"
-//#include "mesh_mgrid.h"
+#include "mesh_mgrid.h"
 
 /*
  * The structure of .mg files is :
@@ -25,22 +23,10 @@
  *     vertex data followed by an encoding of index data.
  */
 
-struct Cell2DInfo {
-	uint32_t vtx_count;
-	uint32_t idx_count;
-	float shift_z;
-	float scale_z;
-};
-
-int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, const Cell2D &cell,
-		 const Pyramid2D &p, FILE *f)
+int mg_load_cell(unsigned rank, CellMeshInfo &info, void *vtx, void *idx, FILE *f)
 {
-	int rank = get_cell_index(cell, pyr);
-	if (rank < 0) {
-		return (-1);
-	}
-	size_t meta_offset = sizeof(Pyramid2D) +
-		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	size_t meta_offset = sizeof(Pyramid) +
+		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Read data offset */
 	size_t data_offset;
@@ -48,7 +34,7 @@ int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, const Cell2D &cell,
 		return -1;
 	}
 	/* Read cell info */
-	if (!fread(&info, sizeof(Cell2DInfo), 1, f)) {
+	if (!fread(&info, sizeof(CellMeshInfo), 1, f)) {
 		return -1;
 	}
 	if (!info.vtx_count || !info.idx_count) {
@@ -67,16 +53,10 @@ int mg_load_cell(Cell2DInfo &info, void *vtx, void *idx, const Cell2D &cell,
 	return 0;
 }
 
-int mg_append_cell(const Cell &cell, const Cell2D &info, const uint16_t *vtx,
-		const uint32_t *idx, const uint32_t *remap, const Pyramid2D &p,
-		FILE *f)
+int mg_append_cell(unsigned rank, const CellMeshInfo &info, const uint16_t *vtx,
+		const uint32_t *idx, const uint32_t *remap, FILE *f)
 
 {
-	int rank = get_cell_index(cell, p);
-	if (rank < 0) {
-		return (-1);
-	}
-	
 	/* Get file size */
 	fseek(f, 0, SEEK_END);
 	size_t data_offset = ftell(f);
@@ -100,30 +80,25 @@ int mg_append_cell(const Cell &cell, const Cell2D &info, const uint16_t *vtx,
 		}
 	}
 	/* Rewind to write metadata */
-	size_t meta_offset = sizeof(Pyramid2D) +
-		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	size_t meta_offset = sizeof(Pyramid) +
+		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Write data offset */
 	if (!fwrite(&data_offset, sizeof(size_t), 1, f)) {
 		return -1;
 	}
-	if (!fwrite(&info, sizeof(Cell2DInfo), 1, f)) {
+	if (!fwrite(&info, sizeof(CellMeshInfo), 1, f)) {
 		return -1;
 	}
 	return 0;
 }
 
-int mg_update_cell(const Cell2D &cell, const uint32_t *remap, 
-		const Pyramid2D &p, FILE *f)
+int mg_update_cell(unsigned rank, const uint32_t *remap, FILE *f)
 
 {
-	int rank = get_cell_index(cell, p);
-	if (rank < 0) {
-		return (-1);
-	}
 	/* Read cell metadata */
-	size_t meta_offset = sizeof(Pyramid2D) + 
-		rank * (sizeof(size_t) + sizeof(Cell2DInfo));
+	size_t meta_offset = sizeof(Pyramid) + 
+		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Read data offset */
 	size_t data_offset;
@@ -131,8 +106,8 @@ int mg_update_cell(const Cell2D &cell, const uint32_t *remap,
 		return -1;
 	}
 	/* Read cell info */
-	Cell2DInfo info;
-	if (!fread(&info, sizeof(Cell2DInfo), 1, f)) {
+	CellMeshInfo info;
+	if (!fread(&info, sizeof(CellMeshInfo), 1, f)) {
 		return -1;
 	}
 	if (!info.vtx_count || !info.idx_count) {
