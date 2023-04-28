@@ -3,8 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "meshoptimizer/src/meshoptimizer.h"
-
 #include "array.h"
 #include "hash.h"
 #include "hash_table.h"
@@ -12,6 +10,7 @@
 #include "mesh.h"
 #include "mesh_mgrid.h"
 #include "mesh_ply.h"
+#include "meshoptimizer/src/meshoptimizer.h"
 
 struct EncVertex {
 	union {
@@ -29,14 +28,12 @@ struct EncVertexHasher {
 	static constexpr EncVertex empty_key = {~static_cast<size_t>(0)};
 	size_t hash(EncVertex v) const { return murmur2_64(0, v.key); }
 	bool is_empty(EncVertex v) const { return (v.key == empty_key.key); }
-	bool is_equal(EncVertex v1, EncVertex v2) const
-	{
+	bool is_equal(EncVertex v1, EncVertex v2) const {
 		return (v1.key == v2.key);
 	}
 };
 
-int init_mgrid(const char *fin, const char *fout, const Pyramid &p)
-{
+int init_mgrid(const char *fin, const char *fout, const Pyramid &p) {
 	Mesh mesh;
 	MBuf data;
 	load_ply(mesh, data, fin);
@@ -231,3 +228,59 @@ int init_mgrid(const char *fin, const char *fout, const Pyramid &p)
 	fclose(f);
 	return (0);
 }*/
+
+/* nx , ny are the coordinates of the block center at zoomlevel zl,
+ * and the simplifications to be made will live at level zl - 1
+ */
+int block_simplify(int nx0, int ny0, int zl, float *blk_vtx, uint32_t *blk_idx,
+		   uint16_t *vtx_buf, uint32_t *idx_buf) {
+	char cur_file[24] = {0};
+	char req_file[24] = {0};
+	FILE *f = NULL;
+	Pyramid p;
+	CellMeshInfo info;
+
+	uint32_t idx_count[16];
+	uint32_t vtx_count[16];
+
+	for (int i = 0; i < 4; ++i) {
+		for (int j = 0; j < 4; j++) {
+			int idx_cell = 4 * i + j;
+			int nx = nx0 - 2 * ((i & 1) == 0) + ((j & 1) >> 0);
+			int ny = ny0 - 2 * ((i & 2) == 0) + ((j & 2) >> 1);
+			int rank = get_mgrid_layout(req_file, p, nx, ny, zl);
+			assert(rank >= 0);
+			/* Update cur_file if needed */
+			if (!cur_file[0] || strcmp(cur_file, req_file) != 0) {
+				if (f) fclose(f);
+				f = fopen(req_file, "rb");
+				if (f) {
+					strcpy(cur_file, req_file);
+				} else {
+					idx_count[idx_cell] = 0;
+					vtx_count[idx_cell] = 0;
+					continue;
+				}
+			}
+			/* Load cell into vtx_buf, idx_buf */
+			mg_load_cell(rank, info, vtx_buf, idx_buf, f);
+			idx_count[idx_cell] = info.idx_count;
+			vtx_count[idx_cell] = info.vtx_count;
+			/* Scale/offset cell vertices and push them (with offset
+			 * indices) in vtx_blk and idx_blk.
+			 */
+			int scale_z = info.scale_z;
+			int shift_z = info.shift_z;
+			for (uint32_t k = 0; k < info.vtx_count; ++k) {
+			}
+			for (uint32_t k = 0; k < info.idx_count; ++k) {
+			}
+		}
+	}
+	/* Simplify the resulting block, keeping track of the
+	 * simplification remap
+	 */
+
+	return (0);
+}
+
