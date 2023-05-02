@@ -12,6 +12,8 @@
 #include "mesh_ply.h"
 #include "meshoptimizer/src/meshoptimizer.h"
 
+#include "swiss_mgrid.h"
+
 struct EncVertex {
 	union {
 		size_t key;
@@ -28,12 +30,14 @@ struct EncVertexHasher {
 	static constexpr EncVertex empty_key = {~static_cast<size_t>(0)};
 	size_t hash(EncVertex v) const { return murmur2_64(0, v.key); }
 	bool is_empty(EncVertex v) const { return (v.key == empty_key.key); }
-	bool is_equal(EncVertex v1, EncVertex v2) const {
+	bool is_equal(EncVertex v1, EncVertex v2) const
+	{
 		return (v1.key == v2.key);
 	}
 };
 
-int init_mgrid(const char *fin, const char *fout, const Pyramid &p) {
+int init_mgrid(const char *fin, const char *fout, const Pyramid &p)
+{
 	Mesh mesh;
 	MBuf data;
 	load_ply(mesh, data, fin);
@@ -229,11 +233,12 @@ int init_mgrid(const char *fin, const char *fout, const Pyramid &p) {
 	return (0);
 }*/
 
-/* nx , ny are the coordinates of the block center at zoomlevel zl,
- * and the simplifications to be made will live at level zl - 1
+/* nx , ny are the coordinates of the block center at level of detail lod,
+ * and the simplifications to be made will live at level lod + 1
  */
-int block_simplify(int nx0, int ny0, int zl, float *blk_vtx, uint32_t *blk_idx,
-		   uint16_t *vtx_buf, uint32_t *idx_buf) {
+int block_simplify(int nx0, int ny0, int lod, float *blk_vtx, uint32_t *blk_idx,
+		   uint16_t *cell_vtx, uint32_t *cell_idx)
+{
 	char cur_file[24] = {0};
 	char req_file[24] = {0};
 	FILE *f = NULL;
@@ -243,16 +248,20 @@ int block_simplify(int nx0, int ny0, int zl, float *blk_vtx, uint32_t *blk_idx,
 	uint32_t idx_count[16];
 	uint32_t vtx_count[16];
 
+	uint32_t blk_idx_count = 0;
+	uint32_t blk_vtx_count = 0;
+
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j < 4; j++) {
 			int idx_cell = 4 * i + j;
 			int nx = nx0 - 2 * ((i & 1) == 0) + ((j & 1) >> 0);
 			int ny = ny0 - 2 * ((i & 2) == 0) + ((j & 2) >> 1);
-			int rank = get_mgrid_layout(req_file, p, nx, ny, zl);
+			int rank = get_mgrid_layout(req_file, p, nx, ny, lod);
 			assert(rank >= 0);
 			/* Update cur_file if needed */
 			if (!cur_file[0] || strcmp(cur_file, req_file) != 0) {
-				if (f) fclose(f);
+				if (f)
+					fclose(f);
 				f = fopen(req_file, "rb");
 				if (f) {
 					strcpy(cur_file, req_file);
@@ -263,7 +272,7 @@ int block_simplify(int nx0, int ny0, int zl, float *blk_vtx, uint32_t *blk_idx,
 				}
 			}
 			/* Load cell into vtx_buf, idx_buf */
-			mg_load_cell(rank, info, vtx_buf, idx_buf, f);
+			mg_load_cell(rank, info, cell_vtx, cell_idx, f);
 			idx_count[idx_cell] = info.idx_count;
 			vtx_count[idx_cell] = info.vtx_count;
 			/* Scale/offset cell vertices and push them (with offset
@@ -271,15 +280,33 @@ int block_simplify(int nx0, int ny0, int zl, float *blk_vtx, uint32_t *blk_idx,
 			 */
 			int scale_z = info.scale_z;
 			int shift_z = info.shift_z;
-			for (uint32_t k = 0; k < info.vtx_count; ++k) {
-			}
 			for (uint32_t k = 0; k < info.idx_count; ++k) {
+				blk_idx[blk_idx_count++] =
+				    cell_idx[k] + blk_vtx_count;
+			}
+			for (uint32_t k = 0; k < info.vtx_count; ++k) {
+				int xi = (int)cell_vtx[3 * k + 0] - (1 << 14) +
+					 (nx - nx0) * (1 << 15);
+				blk_vtx[3 * blk_vtx_count + 0] =
+				    (float)xi / (1 << 16);
+				int yi = (int)cell_vtx[3 * k + 1] - (1 << 14) +
+					 (ny - ny0) * (1 << 15);
+				blk_vtx[3 * blk_vtx_count + 1] =
+				    (float)yi / (1 << 16);
+				int zi = (int)cell_vtx[3 * k + 2] * scale_z +
+					 shift_z;
+				blk_vtx[3 * blk_vtx_count + 2] =
+				    (float)zi / (100000 * (1 << (lod + 1)));
+				blk_vtx_count++;
 			}
 		}
 	}
 	/* Simplify the resulting block, keeping track of the
 	 * simplification remap
 	 */
+	TArray<uint32_t> remap(blk_vtx_count);
+	meshopt_generateVertexRemap(remap.data, blk_idx, blk_idx_count, blk_vtx,
+				    blk_vtx_count, 3 * sizeof(float));
 
 	return (0);
 }
