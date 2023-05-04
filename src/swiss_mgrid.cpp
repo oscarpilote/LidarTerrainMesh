@@ -307,7 +307,9 @@ int block_simplify(int nx0, int ny0, int lod, float *blk_vtx, uint32_t *blk_idx,
 	TArray<uint32_t> remap(blk_vtx_count);
 	meshopt_generateVertexRemap(remap.data, blk_idx, blk_idx_count, blk_vtx,
 				    blk_vtx_count, 3 * sizeof(float));
-
+	meshopt_remapVertexBuffer(blk_vtx, blk_vtx, size_t vertex_count,
+				  size_t vertex_size,
+				  const unsigned int *remap);
 	return (0);
 }
 
