@@ -7,19 +7,52 @@ struct TAabb {
 	TVec3<T> min;
 	TVec3<T> max;
 
-	TAabb<T>& operator|= (const TAabb<T>&& other); 
+	TAabb<T> &operator|=(const TAabb<T> &other);
+	TAabb<T> &operator&=(const TAabb<T> &other);
+	bool is_empty() const;
 };
 typedef TAabb<float> Aabb;
 
-template<typename T>
-TAabb<T>& TAabb<T>::operator|=(const TAabb<T>&& other)
+template <typename T>
+TAabb<T> &TAabb<T>::operator|=(const TAabb<T> &other)
 {
-	if (other.min.x < min.x) min.x = other.min.x;
-	if (other.min.y < min.y) min.y = other.min.y;
-	if (other.min.z < min.z) min.z = other.min.z;
-	if (other.max.x > max.x) max.x = other.max.x;
-	if (other.max.y > max.y) max.y = other.max.y;
-	if (other.max.z > max.z) max.z = other.max.z;
+	if (other.min.x < min.x)
+		min.x = other.min.x;
+	if (other.min.y < min.y)
+		min.y = other.min.y;
+	if (other.min.z < min.z)
+		min.z = other.min.z;
+	if (other.max.x > max.x)
+		max.x = other.max.x;
+	if (other.max.y > max.y)
+		max.y = other.max.y;
+	if (other.max.z > max.z)
+		max.z = other.max.z;
 
 	return *this;
+}
+
+template <typename T>
+TAabb<T> &TAabb<T>::operator&=(const TAabb<T> &other)
+{
+	if (other.min.x > min.x)
+		min.x = other.min.x;
+	if (other.min.y > min.y)
+		min.y = other.min.y;
+	if (other.min.z > min.z)
+		min.z = other.min.z;
+	if (other.max.x < max.x)
+		max.x = other.max.x;
+	if (other.max.y < max.y)
+		max.y = other.max.y;
+	if (other.max.z < max.z)
+		max.z = other.max.z;
+
+	return *this;
+}
+
+template <typename T>
+bool TAabb<T>::is_empty() const
+{
+	return min.x > max.x || min.y > max.y || min.z > max.z;
 }

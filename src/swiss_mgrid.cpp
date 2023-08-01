@@ -11,6 +11,7 @@
 #include "mesh_mgrid.h"
 #include "mesh_ply.h"
 #include "meshoptimizer/src/meshoptimizer.h"
+#include "simplifier_mod.h"
 
 #include "swiss_mgrid.h"
 
@@ -233,11 +234,8 @@ int init_mgrid(const char *fin, const char *fout, const Pyramid &p)
 	return (0);
 }*/
 
-/* nx , ny are the coordinates of the block center at level of detail lod,
- * and the simplifications to be made will live at level lod + 1
- */
-int block_simplify(int nx0, int ny0, int lod, float *blk_vtx, uint32_t *blk_idx,
-		   uint16_t *cell_vtx, uint32_t *cell_idx)
+/* nx , ny are the coordinates of the block center at level of detail lod */
+static int load_blk_cells(MBuf &data, Mesh cells[16], int nx0, int ny0, int lod)
 {
 	char cur_file[24] = {0};
 	char req_file[24] = {0};
@@ -245,15 +243,18 @@ int block_simplify(int nx0, int ny0, int lod, float *blk_vtx, uint32_t *blk_idx,
 	Pyramid p;
 	CellMeshInfo info;
 
-	uint32_t idx_count[16];
-	uint32_t vtx_count[16];
-
 	uint32_t blk_idx_count = 0;
 	uint32_t blk_vtx_count = 0;
+
+	int cell_count = 0;
 
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j < 4; j++) {
 			int idx_cell = 4 * i + j;
+			cells[idx_cell].index_offset = blk_idx_count;
+			/* We shall already apply offsets here */
+			cells[idx_cell].vertex_offset = 0;
+			// cells[idx_cell].vertex_offset = blk_vtx_count;
 			int nx = nx0 - 2 * ((i & 1) == 0) + ((j & 1) >> 0);
 			int ny = ny0 - 2 * ((i & 2) == 0) + ((j & 2) >> 1);
 			int rank = get_mgrid_layout(req_file, p, nx, ny, lod);
@@ -266,50 +267,101 @@ int block_simplify(int nx0, int ny0, int lod, float *blk_vtx, uint32_t *blk_idx,
 				if (f) {
 					strcpy(cur_file, req_file);
 				} else {
-					idx_count[idx_cell] = 0;
-					vtx_count[idx_cell] = 0;
+					cells[idx_cell].index_count = 0;
+					cells[idx_cell].vertex_count = 0;
 					continue;
 				}
 			}
-			/* Load cell into vtx_buf, idx_buf */
-			mg_load_cell(rank, info, cell_vtx, cell_idx, f);
-			idx_count[idx_cell] = info.idx_count;
-			vtx_count[idx_cell] = info.vtx_count;
-			/* Scale/offset cell vertices and push them (with offset
-			 * indices) in vtx_blk and idx_blk.
-			 */
+			cell_count++;
+			/* Load cell */
+			/* For vtx we use a small hack to avoid memory alloc */
+			if (mg_load_cell(rank, info, NULL, NULL, f) != 0)
+				return (1);
+			data.reserve_vertices(blk_vtx_count + info.vtx_count);
+			uint16_t *vtx =
+			    (uint16_t *)(data.positions + blk_vtx_count) +
+			    3 * info.vtx_count * sizeof(uint16_t);
+			data.reserve_indices(blk_idx_count + info.idx_count);
+			uint32_t *idx = data.indices + blk_idx_count;
+			if (mg_load_cell(rank, info, vtx, idx, f) != 0)
+				return (-1);
+			/* Apply iffsets to indices */
+			for (uint32_t k = 0; k < info.idx_count; ++k) {
+				idx[k] += blk_vtx_count;
+			}
+			/* Scale/offset vertices */
 			int scale_z = info.scale_z;
 			int shift_z = info.shift_z;
-			for (uint32_t k = 0; k < info.idx_count; ++k) {
-				blk_idx[blk_idx_count++] =
-				    cell_idx[k] + blk_vtx_count;
-			}
+			Vec3 *blk_vtx = data.positions + blk_vtx_count;
 			for (uint32_t k = 0; k < info.vtx_count; ++k) {
-				int xi = (int)cell_vtx[3 * k + 0] - (1 << 14) +
+				int xi = (int)vtx[3 * k + 0] - (1 << 14) +
 					 (nx - nx0) * (1 << 15);
-				blk_vtx[3 * blk_vtx_count + 0] =
-				    (float)xi / (1 << 16);
-				int yi = (int)cell_vtx[3 * k + 1] - (1 << 14) +
+				blk_vtx[k].x = (float)xi / (1 << 16);
+				int yi = (int)vtx[3 * k + 1] - (1 << 14) +
 					 (ny - ny0) * (1 << 15);
-				blk_vtx[3 * blk_vtx_count + 1] =
-				    (float)yi / (1 << 16);
-				int zi = (int)cell_vtx[3 * k + 2] * scale_z +
-					 shift_z;
-				blk_vtx[3 * blk_vtx_count + 2] =
+				blk_vtx[k].y = (float)yi / (1 << 16);
+				int zi =
+				    (int)vtx[3 * k + 2] * scale_z + shift_z;
+				blk_vtx[k].z =
 				    (float)zi / (100000 * (1 << (lod + 1)));
-				blk_vtx_count++;
 			}
+			cells[idx_cell].index_count = info.idx_count;
+			cells[idx_cell].vertex_count = info.vtx_count;
+			blk_vtx_count += info.vtx_count;
+			blk_idx_count += info.idx_count;
 		}
 	}
-	/* Simplify the resulting block, keeping track of the
-	 * simplification remap
-	 */
-	TArray<uint32_t> remap(blk_vtx_count);
-	meshopt_generateVertexRemap(remap.data, blk_idx, blk_idx_count, blk_vtx,
-				    blk_vtx_count, 3 * sizeof(float));
-	meshopt_remapVertexBuffer(blk_vtx, blk_vtx, size_t vertex_count,
-				  size_t vertex_size,
-				  const unsigned int *remap);
+	if (f)
+		fclose(f);
+	return cell_count;
+}
+
+// TODO : This could be a compact mesh vertices utility fct in mesh_utils.cpp
+static int join_blk_cells(MBuf &data, uint32_t vtx_count, uint32_t idx_count,
+			  uint32_t *remap)
+{
+	uint32_t unique_vtx_count =
+	    meshopt_generateVertexRemap(remap, NULL, vtx_count, data.positions,
+					vtx_count, 3 * sizeof(float));
+	/* Remap data positions and indices */
+	/* Can be safely done in place here. */
+	for (uint32_t k = 0; k < vtx_count; ++k) {
+		assert(remap[k] <= k);
+		data.positions[remap[k]] = data.positions[k];
+	}
+	for (uint32_t k = 0; k < idx_count; ++k) {
+		data.indices[k] = remap[data.indices[k]];
+	}
+	return unique_vtx_count;
+}
+
+static int simplify_block(MBuf &data, uint32_t idx_count, uint32_t vtx_count,
+			  float target_error, uint32_t *remap)
+{
+	TArray<uint32_t> unused(idx_count);
+	meshopt_simplify_mod(unused.data, remap, data.indices, idx_count,
+			     (const float *)data.positions, vtx_count,
+			     3 * sizeof(float), idx_count / 4, target_error,
+			     NULL);
+	return (0);
+}
+
+int build_block(MBuf &data, int nx0, int ny0, int lod)
+{
+	Mesh cells[16];
+	int cell_count = load_blk_cells(data, cells, nx0, ny0, lod);
+	uint32_t orig_vtx_count =
+	    cells[15].vertex_offset + cells[15].vertex_count;
+	uint32_t orig_idx_count =
+	    cells[15].index_offset + cells[15].index_count;
+	TArray<uint32_t> blk_remap(orig_vtx_count);
+	uint32_t blk_vtx_count = join_blk_cells(data, orig_vtx_count,
+						orig_idx_count, blk_remap.data);
+	float target_error = 0.01;
+	TArray<uint32_t> simp_remap(blk_vtx_count);
+	simplify_block(data, orig_idx_count, blk_vtx_count, target_error,
+		       simp_remap.data);
+
 	return (0);
 }
 

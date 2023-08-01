@@ -175,9 +175,15 @@ struct LasPoint las_read_point(const char *raw, unsigned char point_format)
 	case 8:
 		P.return_number = *(uint8_t *)(raw + 14) & 0x15;
 		P.number_of_returns = *(uint8_t *)(raw + 14) >> 4 & 0x15;
+		/* Hack We combine source_id and scanner channel within
+		 * source_id (this assumes that source_id does not effectively
+		 * uses more than 14bits
+		 */
+		P.source_id = (*(uint8_t *)(raw + 15) >> 4) << 14;
 		P.classification = *(uint8_t *)(raw + 16);
 		P.scan_angle = (int8_t)(*(int16_t *)(raw + 18) * 0.006);
-		P.source_id = *(uint16_t *)(raw + 20);
+		/* Endo of source_id hack */
+		P.source_id |= *(uint16_t *)(raw + 20);
 		P.gps_time = *(double *)(raw + 22);
 		break;
 

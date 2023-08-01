@@ -23,10 +23,11 @@
  *     vertex data followed by an encoding of index data.
  */
 
-int mg_load_cell(unsigned rank, CellMeshInfo &info, void *vtx, void *idx, FILE *f)
+int mg_load_cell(unsigned rank, CellMeshInfo &info, void *vtx, void *idx,
+		 FILE *f)
 {
-	size_t meta_offset = sizeof(Pyramid) +
-		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
+	size_t meta_offset =
+	    sizeof(Pyramid) + rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Read data offset */
 	size_t data_offset;
@@ -39,6 +40,10 @@ int mg_load_cell(unsigned rank, CellMeshInfo &info, void *vtx, void *idx, FILE *
 	}
 	if (!info.vtx_count || !info.idx_count) {
 		/* Empty cell is OK*/
+		return 0;
+	}
+	/* If vtx or idx is NULL exit early (info only) */
+	if (vtx == NULL || idx == NULL) {
 		return 0;
 	}
 	/* Jump to cell data */
@@ -54,7 +59,7 @@ int mg_load_cell(unsigned rank, CellMeshInfo &info, void *vtx, void *idx, FILE *
 }
 
 int mg_append_cell(unsigned rank, const CellMeshInfo &info, const uint16_t *vtx,
-		const uint32_t *idx, const uint32_t *remap, FILE *f)
+		   const uint32_t *idx, const uint32_t *remap, FILE *f)
 
 {
 	/* Get file size */
@@ -80,8 +85,8 @@ int mg_append_cell(unsigned rank, const CellMeshInfo &info, const uint16_t *vtx,
 		}
 	}
 	/* Rewind to write metadata */
-	size_t meta_offset = sizeof(Pyramid) +
-		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
+	size_t meta_offset =
+	    sizeof(Pyramid) + rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Write data offset */
 	if (!fwrite(&data_offset, sizeof(size_t), 1, f)) {
@@ -97,8 +102,8 @@ int mg_update_cell(unsigned rank, const uint32_t *remap, FILE *f)
 
 {
 	/* Read cell metadata */
-	size_t meta_offset = sizeof(Pyramid) + 
-		rank * (sizeof(size_t) + sizeof(CellMeshInfo));
+	size_t meta_offset =
+	    sizeof(Pyramid) + rank * (sizeof(size_t) + sizeof(CellMeshInfo));
 	fseek(f, meta_offset, SEEK_SET);
 	/* Read data offset */
 	size_t data_offset;
@@ -115,9 +120,9 @@ int mg_update_cell(unsigned rank, const uint32_t *remap, FILE *f)
 		return 0;
 	}
 	/* Jump to cell data */
-	size_t remap_offset = data_offset 
-		+ 3 * info.vtx_count * sizeof(uint16_t)
-		+ info.idx_count * sizeof(uint32_t);
+	size_t remap_offset = data_offset +
+			      3 * info.vtx_count * sizeof(uint16_t) +
+			      info.idx_count * sizeof(uint32_t);
 	fseek(f, remap_offset, SEEK_SET);
 	if (!fwrite(remap, info.vtx_count * sizeof(uint32_t), 1, f)) {
 		return -1;

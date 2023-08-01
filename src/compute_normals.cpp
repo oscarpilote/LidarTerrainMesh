@@ -192,21 +192,25 @@ int main(int argc, char **argv)
 	printf("\n");
 	printf("Orienting normals :\n");
 	TArray<EOrient> oriented(point_num, ENone);
-	size_t unsettled =
-	    orient_nml_with_scan(points.data, point_num, fls.data, source_num,
-				 qual.data, data.normals, oriented.data);
-	printf("    Oriented after scanlines orientation pass : %.0f %%\n",
-	       (point_num - unsettled) * 100.0 / point_num);
+	size_t unsettled;
+	if (argc < 3) {
+		unsettled = orient_nml_with_scan(
+		    points.data, point_num, fls.data, source_num, qual.data,
+		    data.normals, oriented.data);
+		printf(
+		    "    Oriented after scanlines orientation pass : %.0f %%\n",
+		    (point_num - unsettled) * 100.0 / point_num);
+	}
 	unsettled = orient_nml_with_z(data.normals, oriented.data, point_num,
 				      qual.data);
 	printf("    Oriented after positive z pass : %.0f %%\n",
 	       (point_num - unsettled) * 100.0 / point_num);
 	float progress = 1;
 	int pass = 1;
-	while (unsettled && progress > 0.0001 && pass < 20) {
+	while (unsettled && (progress > 0.0001 || pass < 10) && pass < 50) {
 		size_t newly_settled = propagate_nml_once(
 		    data.positions, point_num, tree, qual.data, data.normals,
-		    oriented.data, 6, 0.7);
+		    oriented.data, 20, 0.7);
 		progress = (float)newly_settled / unsettled;
 		unsettled -= newly_settled;
 		printf("\r    Oriented after propagate pass %d : %.1f %%\n",

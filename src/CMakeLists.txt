@@ -45,6 +45,7 @@ target_link_libraries(swiss_stitch miniply)
 target_compile_features(swiss_stitch PRIVATE cxx_std_17)
 target_compile_options(swiss_stitch PRIVATE -Wall)
 
+#[===[
 add_executable(swiss_build_one
 	mesh.cpp
 	mesh_ply.cpp
@@ -54,6 +55,8 @@ add_executable(swiss_build_one
 target_link_libraries(swiss_build_one miniply meshoptimizer)
 target_compile_features(swiss_build_one PRIVATE cxx_std_17)
 target_compile_options(swiss_build_one PRIVATE -Wall)
+]===]
+#
 
 add_executable(compute_normals
 	las_read.cpp
