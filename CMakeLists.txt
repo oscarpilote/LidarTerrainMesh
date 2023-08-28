@@ -7,9 +7,11 @@ set( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 set( CMAKE_VERBOSE_MAKEFILE OFF )
 
 
-add_subdirectory(
-	src
-	)
+add_subdirectory(src)
+add_subdirectory(extern/miniply)
+add_subdirectory(extern/meshoptimizer/src)
+add_subdirectory(extern/lazperf)
+
 
 
 

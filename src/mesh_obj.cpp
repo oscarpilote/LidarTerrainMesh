@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 
 #define FAST_OBJ_IMPLEMENTATION 1
@@ -150,4 +151,37 @@ int load_obj(Mesh &mesh, MBuf &data, const char *fname)
 	fast_obj_destroy(obj);
 
 	return (res);
+}
+
+int write_obj(const Mesh &m, const MBuf &data, const char *fname)
+{
+	FILE *f = fopen(fname, "w");
+	if (!f)
+		return -1;
+
+	for (size_t i = 0; i < m.vertex_count; i++) {
+		const Vec3 &pos = data.positions[i + m.vertex_offset];
+		fprintf(f, "v %f %f %f\n", pos.x, pos.y, pos.z);
+	}
+
+	if (data.vtx_attr & VtxAttr::NML) {
+		for (size_t i = 0; i < m.vertex_count; i++) {
+			const Vec3 &nml = data.normals[i + m.vertex_offset];
+			fprintf(f, "vn %f %f %f\n", nml.x, nml.y, nml.z);
+		}
+		for (size_t i = 0; i < m.index_count; i += 3) {
+			const uint32_t *idx = data.indices + m.index_offset + i;
+			fprintf(f, "f %d//%d %d//%d %d//%d\n", idx[0] + 1,
+				idx[0] + 1, idx[1] + 1, idx[1] + 1, idx[2] + 1,
+				idx[2] + 1);
+		}
+	} else {
+		for (size_t i = 0; i < m.index_count; i += 3) {
+			const uint32_t *idx = data.indices + m.index_offset + i;
+			fprintf(f, "f %d %d %d\n", idx[0] + 1, idx[1] + 1,
+				idx[2] + 1);
+		}
+	}
+	fclose(f);
+	return 0;
 }

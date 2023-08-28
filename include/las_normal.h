@@ -12,11 +12,13 @@
 #define NML_Z_THRESH 0.55
 
 enum EOrient {
-	ENone = 0,
-	ETmpPlague = 1,
-	EPlague = 2,
-	EPositiveZ = 3,
-	EScanline = 4
+	EDead = 0,
+	ENone,
+	ETmpPlague,
+	EOriented,
+	EPlague,
+	EPositiveZ,
+	EScanline
 };
 
 void estim_unoriented_nml(const Vec3 *pos, size_t point_num, Vec3 *nml,
@@ -34,5 +36,5 @@ size_t orient_nml_with_scan(const LasPoint *points, size_t point_num,
 
 size_t propagate_nml_once(const Vec3 *pos, size_t point_num,
 			  const KdTree<3> &tree, const float *qual, Vec3 *nml,
-			  EOrient *oriented, size_t probes = FLIP_PROBES,
+			  EOrient *oriented, int probes = FLIP_PROBES,
 			  float tol = FLIP_TOL);

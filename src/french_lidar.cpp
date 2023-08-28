@@ -22,11 +22,12 @@
 #include "mesh_utils.h"
 #include "vertex_table.h"
 
+#include "copc.h"
 #include "las_normal.h"
 #include "las_read.h"
 #include "las_source.h"
 
-#include "swiss_raster.h"
+//#include "swiss_raster.h"
 
 /* Size of tile boundary buffer in cm */
 #define BDY_BUFFER 10000
@@ -50,12 +51,19 @@ struct Cfg {
 	float weight;
 	float hausd;
 	float hgrad;
-	bool ani;
-	bool clean;
+	int clean;
 	bool verbose;
 	bool optimize;
 	bool encode;
 	bool nml_confidence;
+};
+
+struct Timings {
+	unsigned int read_and_filter = 0;
+	unsigned int estim_nml = 0;
+	unsigned int poisson_recon = 0;
+	unsigned int mmgs = 0;
+	unsigned int total = 0;
 };
 
 static int process_args(int argc, const char **argv, struct Cfg &cfg)
@@ -88,17 +96,16 @@ static int process_args(int argc, const char **argv, struct Cfg &cfg)
 	cfg.weight = (argc >= 7) ? atof(argv[6]) : 4;
 	cfg.hausd = (argc >= 8) ? atof(argv[7]) : 0.1f;
 	cfg.hgrad = (argc >= 9) ? atof(argv[8]) : 5.f;
-	cfg.ani = (argc >= 10) ? atoi(argv[9]) : 0;
-	cfg.clean = (argc >= 11) ? atoi(argv[10]) : 0;
-	cfg.verbose = (argc >= 12) ? atoi(argv[11]) : 1;
-	cfg.optimize = (argc >= 13) ? atoi(argv[12]) : 1;
-	cfg.encode = (argc >= 14) ? atoi(argv[13]) : 0;
-	cfg.nml_confidence = (argc >= 15) ? atoi(argv[14]) : 1;
+	cfg.clean = (argc >= 10) ? atoi(argv[9]) : 1;
+	cfg.verbose = (argc >= 11) ? atoi(argv[10]) : 1;
+	cfg.optimize = (argc >= 12) ? atoi(argv[11]) : 1;
+	cfg.encode = (argc >= 13) ? atoi(argv[12]) : 0;
+	cfg.nml_confidence = (argc >= 14) ? atoi(argv[13]) : 1;
 
 	return (0);
 }
 
-static void print_cfg(struct Cfg &cfg)
+static void print_cfg(const struct Cfg &cfg)
 {
 	printf("\n");
 	printf("Configuration :\n");
@@ -108,6 +115,31 @@ static void print_cfg(struct Cfg &cfg)
 	printf("Output dir  : %s\n", cfg.out_dir);
 	printf("Verbosity   : %d\n", cfg.verbose ? 1 : 0);
 	printf("Simplify    : hausd=%f , hgrad=%f\n", cfg.hausd, cfg.hgrad);
+}
+
+static void print_timings(const Timings &tt)
+{
+	unsigned div = 1000000;
+	unsigned int other = tt.total - tt.read_and_filter - tt.estim_nml -
+			     tt.poisson_recon - tt.mmgs;
+	printf("\n");
+	printf("Timings :\n");
+	printf("---------\n");
+	printf("Read data   : ");
+	printf("%3d s (%.1f%%)\n", tt.read_and_filter / div,
+	       100.f * tt.read_and_filter / tt.total);
+	printf("Estim nml   : ");
+	printf("%3d s (%.1f%%)\n", tt.estim_nml / div,
+	       100.f * tt.estim_nml / tt.total);
+	printf("Poisson     : ");
+	printf("%3d s (%.1f%%)\n", tt.poisson_recon / div,
+	       100.f * tt.poisson_recon / tt.total);
+	printf("MMGS        : ");
+	printf("%3d s (%.1f%%)\n", tt.mmgs / div, 100.f * tt.mmgs / tt.total);
+	printf("Other       : ");
+	printf("%3d s (%.1f%%)\n", other / div, 100.f * other / tt.total);
+	printf("Total       : ");
+	printf("%3d s \n", tt.total / div);
 }
 
 static char *get_filename(int x, int y, const char *dir, const char *ext)
@@ -124,7 +156,7 @@ static char *get_filename(int x, int y, const char *dir, const char *ext)
 	if (!trailing_slash) {
 		fname[base_len - 1] = '/';
 	}
-	snprintf(fname + base_len, 32, "%4d_%4d.%s", x, y, ext);
+	snprintf(fname + base_len, 32, "%04d_%04d.%s", x, y, ext);
 
 	return fname;
 }
@@ -169,57 +201,6 @@ static void compact_mesh(Mesh &mesh, MBuf &data)
 	printf("A total of %d (%.2f M) Tri after compacting.\n",
 	       mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
 }
-
-#if 0
-static void quantize_mesh(const Mesh &mesh, MBuf &data, float h)
-{
-	if (h <= 0)
-		return;
-	float *pos = (float *)(data.positions + mesh.vertex_offset);
-	float invh = 1. / h;
-	for (size_t i = 0; i < mesh.vertex_count; ++i) {
-		pos[3 * i + 0] = h * roundf(pos[3 * i + 0] * invh);
-		pos[3 * i + 1] = h * roundf(pos[3 * i + 1] * invh);
-		pos[3 * i + 2] = h * roundf(pos[3 * i + 2] * invh);
-	}
-}
-#endif
-
-#if 0
-static void clusterize_mesh(const Mesh &mesh, MBuf &data, float h)
-{
-	if (h <= 0)
-		return;
-
-	const float sqr_h = h * h;
-	const uint32_t todo = ~0u;
-
-	TArray<uint32_t> remap(mesh.vertex_count, todo);
-
-	const float *pos = (const float *)(data.positions + mesh.vertex_offset);
-	KdCoords<3> kdcoords{pos, mesh.vertex_count};
-	KdTree<3> kdtree(3, kdcoords, 10);
-	const size_t probes = 10;
-	TArray<unsigned> knn_idx(probes);
-	TArray<float> sqr_dist(probes);
-	for (size_t i = 0; i < mesh.vertex_count; ++i) {
-		if (remap[i] != todo)
-			continue;
-		remap[i] = i;
-		const float *query = &pos[3 * i];
-		int found =
-		    kdtree.knnSearch(query, probes, &knn_idx[0], &sqr_dist[0]);
-		for (int j = 0; j < found; ++j) {
-			if (sqr_dist[j] <= sqr_h)
-				remap[knn_idx[j]] = i;
-		}
-	}
-	uint32_t *indices = data.indices + mesh.index_offset;
-	for (size_t i = 0; i < mesh.index_count; ++i) {
-		indices[i] = remap[indices[i]];
-	}
-}
-#endif
 
 static void optimize_mesh(Mesh &mesh, MBuf &data)
 {
@@ -289,21 +270,29 @@ static inline int get_source_idx(const TArray<int> &sources, int source_id)
 	return (-1);
 }
 
-static inline void rebase_las_point(struct LasPoint &p, int dx, int dy)
+static bool filter_las_point(const LasPoint &p, const LasFileInfo &info,
+			     const TAabb<double> box)
 {
-	p.x += dx * 100000;
-	p.y += dy * 100000;
+	double pos[3];
+	pos[0] = p.x * info.scale[0] + info.offset[0];
+	pos[1] = p.y * info.scale[1] + info.offset[1];
+	pos[2] = p.z * info.scale[2] + info.offset[2];
+
+	/* Bbox filter */
+	if ((pos[0] < box.min[0]) || (pos[0] > box.max[0]) ||
+	    (pos[1] < box.min[1]) || (pos[1] > box.max[1])) {
+		return false;
+	}
+
+	/* Altitude filter */
+	if (pos[2] < 2200) {
+		return (p.classification == 2 || p.classification == 9);
+	} else {
+		return p.classification <= 9;
+	}
 }
 
-static inline bool filter_las_point(const struct LasPoint &p, int bdy_buffer)
-{
-	/* 100m boundary buffer size */
-	const int bd = bdy_buffer;
-	bool ret = (p.x > -bd) && (p.x < 100000 + bd) && (p.y > -bd) &&
-		   (p.y < 100000 + bd) && (p.classification == 2);
-	return (ret);
-}
-
+#if 0
 static bool filter_raster_point(const struct LasPoint &p,
 				const TArray<uint32_t> &density, int N)
 {
@@ -325,7 +314,9 @@ static bool filter_raster_point(const struct LasPoint &p,
 	int pix = pix_y * N + pix_x;
 	return (density[pix] == 0);
 }
+#endif
 
+#if 0
 static bool filter_bdy_raster_point(const struct LasPoint &p, int N)
 {
 	/* 500m to 100m boundary buffer size */
@@ -341,130 +332,118 @@ static bool filter_bdy_raster_point(const struct LasPoint &p, int N)
 	}
 	return (true);
 }
+#endif
 
-static int get_las_counts(TArray<int> &source_ids, TArray<int> &source_counts,
-			  int x0, int y0, const char *base_dir)
+static TAabb<double> las_bbox(int x0, int y0)
 {
-	int file_count = 0;
-	for (int i = 0; i < 9; ++i) {
-		int dx = (i % 3) - 1;
-		int dy = (i / 3) - 1;
-		int x = x0 + dx;
-		int y = y0 + dy;
-		char *fname = get_filename(x, y, base_dir, "laz");
-		struct LasFileInfo info;
-		void *laz_reader = laz_read_info(fname, info)) 
-		if (!laz_reader)
-		{
-			free(fname);
-			continue;
-		}
-		file_count += 1;
-
-		struct LasPoint p;
-		for (size_t i = 0; i < info.point_num; ++i) {
-			p = laz_read_point(laz_reader);
-			rebase_las_point(p, dx, dy);
-			if (!filter_las_point(p, BDY_BUFFER))
-				continue;
-			int idx = get_source_idx(source_ids, p.source_id);
-			if (idx >= 0) {
-				source_counts[idx]++;
-			} else {
-				source_ids.push_back(p.source_id);
-				source_counts.push_back(1);
-			}
-		}
-		free(fname);
-	}
-	return file_count;
+	TAabb<double> box;
+	box.min.x = 1000 * x0 - 100;
+	box.min.y = 1000 * y0 - 1100;
+	box.min.z = -1000;
+	box.max.x = 1000 * x0 + 1100;
+	box.max.y = 1000 * y0 + 100;
+	box.max.z = 9000;
+	return box;
 }
 
-static int accumulate_counts(TArray<int> &offsets, const TArray<int> &counts)
+static uint32_t filter_and_add_points(TArray<LasPoint> &points, const char *src,
+				      uint32_t src_count,
+				      const LasFileInfo info,
+				      const TAabb<double> box)
 {
-	assert(offsets.size == counts.size);
-	offsets[0] = 0;
-	for (size_t i = 1; i < offsets.size; ++i) {
-		offsets[i] = offsets[i - 1] + counts[i - 1];
+	size_t init_point_count = points.size;
+	size_t point_count = init_point_count;
+	points.resize(point_count + src_count); // Over estimate, shrink later
+	for (uint32_t i = 0; i < src_count; ++i) {
+		LasPoint &p = points[point_count];
+		p = las_read_point(src, info.point_format);
+		if (filter_las_point(p, info, box))
+			point_count++;
+		src += info.point_size;
 	}
-	return offsets[offsets.size - 1] + counts[counts.size - 1];
-}
+	points.resize(point_count);
 
-static void fill_las_points(TArray<struct LasPoint> &points,
-			    const TArray<int> &ids, const TArray<int> &counts,
-			    TArray<int> &offsets, int x0, int y0,
-			    const char *base_dir)
-{
-	for (int i = 0; i < 9; ++i) {
-		int dx = (i % 3) - 1;
-		int dy = (i / 3) - 1;
-		int x = x0 + dx;
-		int y = y0 + dy;
-		char *fname = get_filename(x, y, base_dir, "las");
-		struct LasFileInfo info;
-		void *laz_reader = laz_read_info(fname, info)) 
-		if (!laz_reader)
-		{
-			free(fname);
-			continue;
-		}
-
-		struct LasPoint p;
-		for (size_t i = 0; i < info.point_num; ++i) {
-			p = laz_read_point(laz_reader);
-			rebase_las_point(p, dx, dy);
-			if (!filter_las_point(p, BDY_BUFFER))
-				continue;
-			int idx = get_source_idx(ids, p.source_id);
-			assert(idx >= 0);
-			p.source_idx = idx;
-			points[offsets[idx]] = p;
-			/* We will settle them back before exit */
-			offsets[idx]++;
-		}
-		free(fname);
-	}
-	/* Reset offsets to their correct values */
-	for (size_t i = 0; i < offsets.size; ++i) {
-		offsets[i] -= counts[i];
-	}
+	return (point_count - init_point_count);
 }
 
 static size_t read_and_filter_las_data(TArray<struct LasPoint> &points,
-				       TArray<struct SourceFlightLine> &fls,
+				       double offset[3], double scale[3],
 				       const struct Cfg &cfg)
 {
-	TArray<int> ids;
-	TArray<int> counts;
-	get_las_counts(ids, counts, cfg.x0, cfg.y0, cfg.base_dir);
-	size_t las_source_num = ids.size;
-	if (!las_source_num) {
-		if (cfg.verbose)
-			printf("No LIDAR data found.\n");
-		return (0);
+	TAabb<double> box = las_bbox(cfg.x0, cfg.y0);
+	TArray<char> buf;
+	for (int i = 0; i < 9; ++i) {
+		if (cfg.verbose) {
+			printf("\rReading point cloud data [%2d]", i);
+			fflush(stdout);
+		}
+		int dx = (i % 3) - 1;
+		int dy = (i / 3) - 1;
+		int x = cfg.x0 + dx;
+		int y = cfg.y0 + dy;
+		char *fname = get_filename(x, y, cfg.base_dir, "copc.laz");
+		LasFileInfo info;
+		if (las_read_info(fname, info)) {
+			free(fname);
+			continue;
+		}
+		assert(info.copc);
+		struct CopcReader *copc = copc_init(fname);
+		if (!copc) {
+			free(fname);
+			continue;
+		}
+		uint32_t cell_count = copc_set_target_bbox(copc, box);
+		// printf("Cell count : %d\n", cell_count);
+		for (uint32_t k = 0; k < cell_count; ++k) {
+			int cell_points = copc_cell_point_count(copc, k);
+			assert(cell_points);
+			buf.reserve(cell_points * info.point_size);
+			copc_read_cell(copc, k, &buf[0]);
+			filter_and_add_points(points, &buf[0], cell_points,
+					      info, box);
+			// printf("Cell points : %d, New points : %d\n",
+			//        cell_points, new_points);
+		}
+		copc_fini(copc);
+		free(fname);
 	}
-	TArray<int> offsets(las_source_num);
-	int point_num = accumulate_counts(offsets, counts);
-	points.clear();
-	points.resize(point_num);
-	fill_las_points(points, ids, counts, offsets, cfg.x0, cfg.y0,
-			cfg.base_dir);
+	if (cfg.verbose)
+		printf("\n");
+	return points.size;
+}
+
+static size_t analyze_source_flight_lines(TArray<struct LasPoint> &points,
+					  TArray<struct SourceFlightLine> &fls,
+					  const struct Cfg &cfg)
+{
+	TArray<int> sources;
+	for (size_t i = 0; i < points.size; ++i) {
+		LasPoint &p = points[i];
+		int idx = get_source_idx(sources, p.source_id);
+		if (idx >= 0) {
+			p.source_idx = idx;
+		} else {
+			p.source_idx = sources.size;
+			sources.push_back(p.source_id);
+		}
+	}
 	/* Derive fligh lines azimut from data. Used later for normals
 	 */
 	if (cfg.verbose)
 		printf("Reconstructing flightlines :");
-	TArray<struct SourceStat> stats(las_source_num);
+	TArray<struct SourceStat> stats(sources.size);
 	las_stat_sources(points, stats);
-	fls.resize(las_source_num);
+	fls.resize(sources.size);
 	double scale[3] = {1., 1., 1.};
 	int valid = las_approx_flight_lines(points, scale, stats, fls);
 	if (cfg.verbose)
 		printf(" found %d valid out of %zu sources\n", valid,
-		       las_source_num);
-
-	return points.size;
+		       sources.size);
+	return sources.size;
 }
 
+#if 0
 static size_t get_raster_point_count(int x0, int y0, const char *base_dir,
 				     const TArray<uint32_t> &density, int N)
 {
@@ -589,7 +568,9 @@ static size_t fill_bdy_raster_points(TArray<struct LasPoint> &points,
 	}
 	return (point_idx - offset);
 }
+#endif
 
+#if 0
 static void
 build_las_point_density_matrix(const TArray<struct LasPoint> &points,
 			       TArray<uint32_t> &density, int N)
@@ -610,7 +591,9 @@ build_las_point_density_matrix(const TArray<struct LasPoint> &points,
 		density[pix] += 1;
 	}
 }
+#endif
 
+#if 0
 static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 					  TArray<struct SourceFlightLine> &fls,
 					  const struct Cfg &cfg)
@@ -671,9 +654,11 @@ static size_t read_and_filter_raster_data(TArray<struct LasPoint> &points,
 
 	return raster_point_count;
 }
+#endif
 
 static int send_points_to_unit_cube(const TArray<struct LasPoint> &points,
-				    Vec3 *pos, struct Transform &t)
+				    Vec3 *pos, struct Transform &t,
+				    const Cfg cfg)
 {
 	int min_z = INT_MAX, max_z = -INT_MAX;
 	for (size_t i = 0; i < points.size; ++i) {
@@ -693,14 +678,18 @@ static int send_points_to_unit_cube(const TArray<struct LasPoint> &points,
 	t.scale = (float)n / (n + 2);
 	t.shift.x = t.shift.y = 1.f / (n + 2);
 	float mean = 0.5 * (min_z + max_z) * 1e-5 * t.scale;
-	/* Round shift.z so that octree boxes match vertically to neighboors */
+	/* Round shift.z so that octree boxes match vertically to
+	 * neighboors */
 	t.shift.z = 0.5 - round(16 * mean) * 0.0625;
 	assert(min_z * 1e-5 * t.scale + t.shift.z >= 0);
 	assert(max_z * 1e-5 * t.scale + t.shift.z <= 1);
 	for (size_t i = 0; i < points.size; ++i) {
-		pos[i].x = points[i].x * 1e-5 * t.scale + t.shift.x;
-		pos[i].y = points[i].y * 1e-5 * t.scale + t.shift.y;
-		pos[i].z = points[i].z * 1e-5 * t.scale + t.shift.z;
+		double scal = 1e-5 * t.scale;
+		pos[i].x = (points[i].x - 100000 * cfg.x0) * scal + t.shift.x;
+		pos[i].y =
+		    (points[i].y - 100000 * (cfg.y0 - 1)) * scal + t.shift.y;
+		pos[i].z = points[i].z * scal + t.shift.z;
+		// printf("%lf %lf %lf\n", pos[i].x, pos[i].y, pos[i].z);
 	}
 	return (0);
 }
@@ -716,7 +705,7 @@ static void nml_cb(float progress)
  * set from it. Normal orientation reconstruction combines geometric
  * and lidar source statistics which are computed on their own.
  */
-static int build_oriented_point_set(const struct Cfg &cfg)
+static int build_oriented_point_set(const struct Cfg &cfg, Timings &tt)
 {
 
 	/* Re-use existing output ? */
@@ -733,13 +722,24 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 	}
 
 	/* Read data */
+	Timer chrono;
+	chrono.start();
 	TArray<struct LasPoint> points;
 	TArray<struct SourceFlightLine> fls;
-	size_t las_num = read_and_filter_las_data(points, fls, cfg);
-	size_t ras_num = read_and_filter_raster_data(points, fls, cfg);
+	double offset[3];
+	double scale[3];
+	size_t las_num = read_and_filter_las_data(points, offset, scale, cfg);
+	tt.read_and_filter = chrono.stop();
+
+	/* Analyze flight lines */
+	analyze_source_flight_lines(points, fls, cfg);
+
+	/* Read (and filter) raster data */
+	// size_t ras_num = read_and_filter_raster_data(points, fls, cfg);
+	size_t ras_num = 0;
 
 	printf("Total Lidar points used    : %zu\n", las_num);
-	printf("Total Raster points used   : %zu\n", ras_num);
+	// printf("Total Raster points used   : %zu\n", ras_num);
 
 	if (!las_num && !ras_num) {
 		printf("No data available for this tile.\n");
@@ -755,7 +755,7 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 	data.reserve_vertices(points.size + 2); /* +2 for dummy box corners */
 
 	struct Transform transf;
-	if (send_points_to_unit_cube(points, data.positions, transf)) {
+	if (send_points_to_unit_cube(points, data.positions, transf, cfg)) {
 		printf("Altitude span too large !\n");
 		return (-1);
 	}
@@ -765,6 +765,7 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 	KdTree<3> kdtree(3, kdcoords, 10);
 
 	/* Build normals using geometry and scanlines*/
+	chrono.start();
 	printf("Eval. normal directions    :  ");
 	TArray<float> qual(points.size + 2); /* +2 for dummy box corners */
 	estim_unoriented_nml(data.positions, points.size, data.normals,
@@ -779,51 +780,61 @@ static int build_oriented_point_set(const struct Cfg &cfg)
 	unset =
 	    orient_nml_with_scan(points.data, points.size, fls.data, fls.size,
 				 qual.data, data.normals, oriented.data);
-	printf("    Oriented after scanlines pass       : %.1f %%\n",
+	printf("    Oriented after scanlines pass        : %.1f %%\n",
 	       (points.size - unset) * 100.f / points.size);
 
 	unset = orient_nml_with_z(data.normals, oriented.data, points.size,
 				  qual.data);
-	printf("    Oriented after positive z pass      : %.1f %%\n",
+	printf("    Oriented after positive z pass       : %.1f %%\n",
 	       (points.size - unset) * 100.f / points.size);
 
-	float progress = 1.f;
 	int pass = 1;
-	while (unset && progress > 0 && pass < 300) {
-		size_t newly_set =
+	float progress = 1.f;
+	while (unset && progress && pass < 100) {
+		size_t newly_set;
+		newly_set =
 		    propagate_nml_once(data.positions, points.size, kdtree,
 				       qual.data, data.normals, oriented.data);
 		progress = (float)newly_set / unset;
 		unset -= newly_set;
-		printf("\r    Oriented after propagate pass nbr %d : %.1f %%",
+		printf("\r    Oriented after propagate pass nbr %2d : "
+		       "%.1f %%",
 		       pass++, (points.size - unset) * 100.f / points.size);
 		fflush(stdout);
 	}
 	printf("\n");
 
 	if (cfg.nml_confidence) {
-		/*weight normals according to orientation found and quality */
+		/*weight normals according to orientation found and
+		 * quality */
 		for (size_t i = 0; i < points.size; ++i) {
-			float weight = (oriented[i] != ENone) ? qual[i] : 0;
+			float weight = (oriented[i] >= EOriented) ? qual[i] : 0;
 			data.normals[i] *= weight;
 		}
+		printf("There are %zu points remaining without clear "
+		       "normal "
+		       "orientation.\nTheir normal was set to zero.\n",
+		       unset);
 	} else {
 		/* Skip points with no orientation found */
 		size_t new_num = 0;
 		for (size_t i = 0; i < points.size; ++i) {
-			if (oriented[i] != ENone) {
+			if (oriented[i] >= EOriented) {
 				data.positions[new_num] = data.positions[i];
 				data.normals[new_num] = data.normals[i];
 				new_num++;
 			}
 		}
-		printf("    %.1f %% vertices discarded due to lack of clear "
+		printf("There were %zu vertices discarded due to lack "
+		       "of clear "
 		       "orientation.\n",
-		       unset * 100.f / points.size);
+		       unset);
 		mesh.vertex_count = new_num;
 	}
+	tt.estim_nml = chrono.stop();
 
-	/* Add dummy points for bounding box to perfectly match unit cube */
+	/* Add dummy points for bounding box to perfectly match unit
+	 * cube */
 	data.positions[mesh.vertex_count] = Vec3{0.f, 0.f, 0.f};
 	data.normals[mesh.vertex_count] = Vec3{0.f, 0.f, 0.f};
 	qual[mesh.vertex_count] = 0;
@@ -899,7 +910,7 @@ static void rescale_and_offset_mesh(Mesh &mesh, MBuf &data,
 	}
 }
 
-static int build_surface_mesh(const struct Cfg &cfg)
+static int build_surface_mesh(const struct Cfg &cfg, Timings &tt)
 {
 	/* Re-use existing output ? */
 	char *recon_out =
@@ -912,6 +923,8 @@ static int build_surface_mesh(const struct Cfg &cfg)
 		return 0;
 	}
 
+	Timer chrono;
+	chrono.start();
 	char *recon_in =
 	    get_filename(cfg.x0, cfg.y0, cfg.out_dir, "points.ply");
 	const char *format =
@@ -925,7 +938,7 @@ static int build_surface_mesh(const struct Cfg &cfg)
 		 cfg.nml_confidence ? 1 : 0, cfg.verbose ? "--verbose" : "");
 	int ret = system(cmd);
 
-	if (cfg.clean) {
+	if (cfg.clean >= 2) {
 		snprintf(cmd, len, "rm -f %s", recon_in);
 		system(cmd);
 	}
@@ -934,6 +947,7 @@ static int build_surface_mesh(const struct Cfg &cfg)
 	free(recon_out);
 	free(recon_in);
 
+	tt.poisson_recon = chrono.stop();
 	return (ret);
 }
 
@@ -1046,6 +1060,7 @@ size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 		}
 	}
 	size_t bd_count = 0;
+	size_t interior_bd = 0;
 	float max_bd_dist = 0;
 	Vec3 *pos = data.positions + mesh.vertex_offset;
 	for (size_t i = 0; i < mesh.vertex_count; ++i) {
@@ -1053,6 +1068,10 @@ size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 			bd_count += 1;
 			float errx = std::abs(pos[i].x - roundf(pos[i].x));
 			float erry = std::abs(pos[i].y - roundf(pos[i].y));
+			if (MIN(errx, erry) > 0.01) {
+				interior_bd += 1;
+				continue;
+			}
 			if (errx <= erry) {
 				pos[i].x = roundf(pos[i].x);
 				max_bd_dist = std::max(max_bd_dist, errx);
@@ -1062,7 +1081,8 @@ size_t fix_boundary_vertices(const Mesh &mesh, MBuf &data)
 			}
 		}
 	}
-	printf("Max_bd_dist : %f\n", max_bd_dist);
+	printf("Max_bd_dist : %f Interior bd count : %zu\n", max_bd_dist,
+	       interior_bd);
 	return bd_count;
 }
 
@@ -1116,8 +1136,8 @@ static int improve_mesh_quality(Mesh &mesh, MBuf &data, const struct Cfg &cfg)
 	MMGS_Free_all(MMG5_ARG_start, MMG5_ARG_ppMesh, &mm, MMG5_ARG_ppMet, &ss,
 		      MMG5_ARG_end);
 
-	/* MMGS will move some vertices out of [0.1] (close to corners), we
-	 * reproject them to the cube afterwards.
+	/* MMGS will move some vertices out of [0.1] (close to corners),
+	 * we reproject them to the cube afterwards.
 	 */
 	fix_boundary_vertices(mesh, data);
 
@@ -1164,7 +1184,7 @@ int write_encoded_mesh(const Mesh &mesh, const MBuf &data, const Cfg &cfg,
 	return (ret);
 }
 
-int postprocess_surface_mesh(const Cfg &cfg)
+int postprocess_surface_mesh(const Cfg &cfg, Timings &tt)
 {
 	char *recon_out =
 	    get_filename(cfg.x0, cfg.y0, cfg.out_dir, "poisson.ply");
@@ -1180,34 +1200,36 @@ int postprocess_surface_mesh(const Cfg &cfg)
 	int num_cc = select_principal_connected_component(mesh, data);
 	if (num_cc != 1) {
 		printf("Removed %d connected components.\n", num_cc - 1);
-		printf(
-		    "A total of %d (%.2f M) Tri after spurious cc removal.\n",
-		    mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
+		printf("A total of %d (%.2f M) Tri after spurious cc "
+		       "removal.\n",
+		       mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
 	}
 
 	/* Recut mesh to 1km boundary */
 	struct Transform transf;
 	read_transform(transf, cfg);
 	recut_mesh(mesh, data, transf);
-	printf("A total of %d (%.2f M) Tri after buffered boundary recut.\n",
+	printf("A total of %d (%.2f M) Tri after buffered boundary "
+	       "recut.\n",
 	       mesh.index_count / 3, 1e-6 * mesh.index_count / 3);
 
 	/* Rescale and offset (scale is now 1 = 1km for x, y and z) */
 	rescale_and_offset_mesh(mesh, data, transf, cfg);
 
 	if (cfg.hausd > 0) {
+		Timer chrono;
+		chrono.start();
 		if (improve_mesh_quality(mesh, data, cfg)) {
 			printf("Error in MMGS\n");
 			return (-1);
 		}
+		tt.mmgs = chrono.stop();
 	}
 
 	if (cfg.optimize) {
-		timer_start();
 		/* Necessary to compact ? */
 		compact_mesh(mesh, data);
 		optimize_mesh(mesh, data);
-		timer_stop("Optimize");
 	}
 
 	/* Save final mesh */
@@ -1239,20 +1261,27 @@ int postprocess_surface_mesh(const Cfg &cfg)
 int main(int argc, char **argv)
 {
 	struct Cfg cfg;
+	struct Timings tt;
+	Timer chrono;
+
+	chrono.start();
 
 	/* Process command line arguments */
 	if (process_args(argc, (const char **)argv, cfg)) {
 		return (-1);
 	}
 
-	printf("\n------ Start of swiss_lidar for %04d %04d ------\n", cfg.x0,
+	printf("\n------ Start of french_lidar for %04d %04d ------\n", cfg.x0,
 	       cfg.y0);
-	print_cfg(cfg);
+
+	if (cfg.verbose) {
+		print_cfg(cfg);
+	}
 
 	printf("\n");
 	printf("I. Building oriented point set :\n");
 	printf("--------------------------------\n");
-	if (build_oriented_point_set(cfg)) {
+	if (build_oriented_point_set(cfg, tt)) {
 		printf("Error in building oriented point set.\n");
 		return (-1);
 	}
@@ -1261,7 +1290,7 @@ int main(int argc, char **argv)
 	printf("II. Building surface mesh from point set :\n");
 	printf("------------------------------------------\n");
 
-	if (build_surface_mesh(cfg)) {
+	if (build_surface_mesh(cfg, tt)) {
 		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
@@ -1270,13 +1299,20 @@ int main(int argc, char **argv)
 	printf("III. Postprocessing surface mesh.\n");
 	printf("---------------------------------\n");
 
-	if (postprocess_surface_mesh(cfg)) {
+	if (postprocess_surface_mesh(cfg, tt)) {
 		printf("Error in Poisson reconstruction\n");
 		return (-1);
 	}
 
-	printf("\n------ End of swiss_lidar for %04d %04d ------\n", cfg.x0,
+	tt.total = chrono.stop();
+
+	if (cfg.verbose) {
+		print_timings(tt);
+	}
+
+	printf("\n------ End of french_lidar for %04d %04d ------\n", cfg.x0,
 	       cfg.y0);
+
 	return (0);
 }
 

@@ -10,26 +10,27 @@
 
 #define CONSUME(to, bytes)                                                     \
 	do {                                                                   \
-		if (fread((to), (bytes), 1, f) != 1)                           \
+		if (fread((to), (bytes), 1, f) != 1) {                         \
+			fclose(f);                                             \
 			return -1;                                             \
+		}                                                              \
 		consumed += (bytes);                                           \
 	} while (0);
 
 int las_read_info(const char *filename, struct LasFileInfo &info)
 {
-	FILE *f;
-	f = fopen(filename, "rb");
-	if (!f) {
-		return (-1);
-	}
+	FILE *f = fopen(filename, "rb");
+	if (!f)
+		return -1;
 
-	char buf[64] = {0};
+	char buf[128] = {0};
 	uint16_t consumed = 0;
 
 	CONSUME(buf, 4);
-
-	if (strncmp(buf, "LASF", 4) != 0)
+	if (strncmp(buf, "LASF", 4) != 0) {
+		fclose(f);
 		return -1;
+	}
 
 	/* File Source ID */
 	CONSUME(buf, 2);
@@ -64,10 +65,14 @@ int las_read_info(const char *filename, struct LasFileInfo &info)
 	CONSUME(&info.offset_to_points, 4);
 
 	/* Number of VLR */
-	CONSUME(buf, 4);
+	int nvlr;
+	CONSUME(&nvlr, 4);
 
 	/* Point Data Record Format */
 	CONSUME(&info.point_format, 1);
+	info.compressed = (info.point_format & 0x80) != 0;
+	info.point_format = info.point_format & 0x7F;
+
 	/* Point Data Record Length */
 	CONSUME(&info.point_size, 2);
 
@@ -97,16 +102,28 @@ int las_read_info(const char *filename, struct LasFileInfo &info)
 		CONSUME(buf, 8);
 		CONSUME(buf, 4);
 		CONSUME(&info.point_num, 8);
+		CONSUME(buf, 120);
+	}
+
+	assert(header_size == consumed);
+
+	if (info.compressed && header_size == 375 && nvlr >= 1) {
+		CONSUME(buf, 54);
+		info.copc = strncmp(buf + 2, "copc", 4) == 0;
+		info.copc &= *(uint16_t *)(buf + 18) == 1;
+	} else {
+		info.copc = false;
 	}
 
 	fclose(f);
-
 	return 0;
 }
 
 void las_print_info(const struct LasFileInfo &info)
 {
 	printf("LAS Version %d.%d\n", info.version_major, info.version_minor);
+	printf("Compressed : %s\n", info.compressed ? "yes" : "no");
+	printf("Copc : %s\n", info.copc ? "yes" : "no");
 	printf("Format: %d, Point Len: %d, Num Points: %zu\n",
 	       info.point_format, info.point_size, info.point_num);
 	printf("Offsets :\n");
@@ -123,28 +140,34 @@ void las_print_info(const struct LasFileInfo &info)
 	printf("z : %lf %lf\n", info.min[2], info.max[2]);
 }
 
-char *las_load_raw_data(const char *filename, const LasFileInfo &info,
-			char *buf)
+char *las_load_data(const char *filename, const LasFileInfo &info, char *buf)
 {
-	FILE *f;
-	f = fopen(filename, "rb");
+	FILE *f = fopen(filename, "rb");
 	if (!f)
 		return NULL;
+
+	if (info.compressed) {
+		printf("Cannot read raw data from LAZ file.\n");
+		printf("Use copc routines for such files.\n");
+		return NULL;
+	}
 
 	size_t raw_size = info.point_size * info.point_num;
 
 	if (fseek(f, info.offset_to_points, SEEK_SET)) {
-		fclose(f);
 		return NULL;
 	}
 
+	bool local_alloc = false;
 	if (!buf) {
 		buf = (char *)malloc(info.point_size * info.point_num);
 		assert(buf);
+		local_alloc = true;
 	}
 
 	if (fread(buf, raw_size, 1, f) != 1) {
-		fclose(f);
+		if (local_alloc)
+			free(buf);
 		return NULL;
 	}
 

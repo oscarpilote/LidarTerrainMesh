@@ -93,7 +93,9 @@ HashTable<K, V, H>::~HashTable()
 	_size = 0;
 
 	free(keys);
+	keys = nullptr;
 	free(vals);
+	vals = nullptr;
 }
 
 template <typename K, typename V, typename H>
@@ -204,8 +206,8 @@ void HashTable<K, V, H>::grow(size_t new_buckets)
 	}
 
 	free(keys);
-	free(vals);
 	keys = newk;
+	free(vals);
 	vals = newv;
 	_buckets = new_buckets;
 }

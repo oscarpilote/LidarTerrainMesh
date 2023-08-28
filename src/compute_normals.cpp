@@ -39,7 +39,7 @@ int get_ids_and_counts(TArray<int> &source_ids, TArray<int> &source_counts,
 	if (las_read_info(fname, info)) {
 		return (-1);
 	}
-	char *raw_data = las_load_raw_data(fname, info, NULL);
+	char *raw_data = las_load_data(fname, info, NULL);
 	assert(raw_data);
 
 	struct LasPoint p;
@@ -76,7 +76,7 @@ void fill_points(TArray<struct LasPoint> &points, const TArray<int> &ids,
 {
 	struct LasFileInfo info;
 	las_read_info(fname, info);
-	char *raw_data = las_load_raw_data(fname, info, NULL);
+	char *raw_data = las_load_data(fname, info, NULL);
 	assert(raw_data);
 	struct LasPoint p;
 	for (size_t i = 0; i < info.point_num; ++i) {

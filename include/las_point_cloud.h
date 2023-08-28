@@ -2,8 +2,7 @@
 
 #include <stdint.h>
 
-struct LasFileInfo
-{
+struct LasFileInfo {
 	uint64_t point_num;
 	double offset[3];
 	double scale[3];
@@ -12,12 +11,13 @@ struct LasFileInfo
 	uint8_t version_major;
 	uint8_t version_minor;
 	uint8_t point_format;
+	bool compressed;
+	bool copc;
 	uint32_t offset_to_points;
 	uint16_t point_size;
 };
 
-struct LasPoint
-{
+struct LasPoint {
 	int32_t x;		   //  0 -  4
 	int32_t y;		   //  4 -  8
 	int32_t z;		   //  8 - 12
